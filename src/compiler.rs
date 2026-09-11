@@ -1,0 +1,227 @@
+use std::collections::BTreeSet;
+use std::io::BufReader;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+use anyhow::{bail, Context, Result};
+use cargo_metadata::Message;
+
+use crate::cli::Cli;
+
+#[derive(Debug, Clone)]
+pub struct TestArtifact {
+    /// Name of the cargo target (lib or integration test).
+    pub target_name: String,
+    /// Path to the compiled test executable (ELF).
+    pub executable: PathBuf,
+}
+
+/// Build all test targets for the cross target without running them, and collect
+/// the produced ELF executables from cargo's JSON message stream.
+pub fn build_test_artifacts(cli: &Cli) -> Result<Vec<TestArtifact>> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+
+    let mut cmd = Command::new(cargo);
+    cmd.arg("--config");
+    cmd.arg(linker_fixup_config(cli)?.unwrap_or_else(|| "build.rustflags=[]".to_string()));
+    cmd.args(["test", "--no-run", "--message-format=json-render-diagnostics"])
+        .arg("--target")
+        .arg(&cli.target);
+    if cli.release {
+        cmd.arg("--release");
+    }
+    if !cli.features.is_empty() {
+        cmd.arg("--features").arg(cli.features.join(","));
+    }
+    if cli.all_features {
+        cmd.arg("--all-features");
+    }
+    if cli.no_default_features {
+        cmd.arg("--no-default-features");
+    }
+    if let Some(name) = &cli.test {
+        cmd.args(["--test", name]);
+    }
+    if let Some(pkg) = &cli.package {
+        cmd.args(["--package", pkg]);
+    }
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if cli.verbose {
+        eprintln!("qtest: running `{cmd:?}`");
+    }
+
+    let mut child = cmd.spawn().context("failed to spawn cargo")?;
+
+    // Drain stderr in the background so cargo's diagnostics stream live and the
+    // pipe can never fill up while we parse JSON messages from stdout.
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+    let stderr_reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
+
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let mut artifacts = Vec::new();
+    let mut seen = BTreeSet::new();
+    for message in Message::parse_stream(BufReader::new(stdout)) {
+        let message = message.context("failed to parse cargo JSON output")?;
+        if let Message::CompilerArtifact(art) = message {
+            if !art.profile.test {
+                continue;
+            }
+            let Some(executable) = art.executable else { continue };
+            let path = PathBuf::from(executable.as_std_path());
+            if seen.insert(path.clone()) {
+                artifacts.push(TestArtifact {
+                    target_name: art.target.name.clone(),
+                    executable: path,
+                });
+            }
+        }
+    }
+
+    let status = child.wait().context("failed to wait for cargo")?;
+    let stderr_output = stderr_reader.join().unwrap_or_default();
+    if !status.success() {
+        eprint!("{}", String::from_utf8_lossy(&stderr_output));
+        bail!(
+            "cargo failed to build the tests for target `{}` (see output above)",
+            cli.target
+        );
+    }
+
+    if artifacts.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&stderr_output));
+        bail!(
+            "cargo produced no test executables for target `{}`.\n\
+             Hint: the embedded-test harness requires `harness = false` on the \
+             [lib] and [[test]] targets of your crate.",
+            cli.target
+        );
+    }
+    Ok(artifacts)
+}
+
+/// Escape a string for inclusion in a TOML double-quoted string.
+fn toml_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Default memory map for QEMU's MPS2 boards (mps2-an385/386/505): ZBTSRAM1
+/// aliased at 0x0 (boot window), ZBTSRAM2&3 at 0x20000000.
+fn default_memory_x(target: &str) -> &'static str {
+    let _ = target; // same layout on all MPS2 variants
+    "MEMORY\n{\n  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 4M\n  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 4M\n}\n"
+}
+
+/// Build a `--config target.<triple>.rustflags=[...]` argument that injects the
+/// linker scripts required by embedded-test on Cortex-M targets:
+///
+/// * `-Tlink.x` (cortex-m-rt) -- its build script only adds a search path; without
+///   the script there is no vector table and the guest locks up at reset;
+/// * `-Tembedded-test.x` (embedded-test metadata section);
+/// * a default `memory.x` for the QEMU machine, when the crate has none at its root.
+///
+/// Returns `None` when nothing needs injecting.
+fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
+    if cli.no_linker_fixup {
+        return Ok(None);
+    }
+
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .exec()
+        .context("failed to run `cargo metadata`")?;
+    let root = match &cli.package {
+        Some(spec) => metadata
+            .packages
+            .iter()
+            .find(|p| p.name == *spec)
+            .with_context(|| format!("package `{spec}` not found in workspace"))?,
+        None => metadata
+            .root_package()
+            .context("workspace has no root package; pass --package")?,
+    };
+
+    // Walk the dependency graph from the root package.
+    let resolve = metadata.resolve.as_ref().context("cargo metadata returned no resolve graph")?;
+    let mut want_cortex_m_rt = false;
+    let mut want_embedded_test = false;
+    let mut stack = vec![root.id.clone()];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(node) = resolve.nodes.iter().find(|n| n.id == id) else { continue };
+        for dep in &node.deps {
+            // NodeDep.name is the *target* name: underscores, not the package name's hyphens.
+            let name = dep.name.replace('_', "-");
+            match name.as_str() {
+                "cortex-m-rt" => want_cortex_m_rt = true,
+                "embedded-test" => want_embedded_test = true,
+                _ => {}
+            }
+            stack.push(dep.pkg.clone());
+        }
+    }
+    if !want_cortex_m_rt && !want_embedded_test {
+        bail!(
+            "neither `cortex-m-rt` nor `embedded-test` found in the dependency graph of `{}`.\n             cargo-qtest only knows how to run embedded-test test suites.",
+            root.name
+        );
+    }
+
+    let mut flags: Vec<String> = std::env::var("RUSTFLAGS")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+
+    if want_cortex_m_rt {
+        flags.push("-C".into());
+        flags.push("link-arg=-Tlink.x".into());
+        let manifest_dir = root.manifest_path.parent().unwrap().as_std_path().to_path_buf();
+        flags.push("-C".into());
+        flags.push(format!("link-arg=-L{}", manifest_dir.display()));
+        if !manifest_dir.join("memory.x").exists() {
+            let dir = std::env::temp_dir().join(format!(
+                "cargo-qtest-memory-{}",
+                cli.target.replace(['-', '.'], "_")
+            ));
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("memory.x"), default_memory_x(&cli.target))?;
+            flags.push("-C".into());
+            flags.push(format!("link-arg=-L{}", dir.display()));
+        }
+    }
+    if want_embedded_test {
+        flags.push("-C".into());
+        flags.push("link-arg=-Tembedded-test.x".into());
+    }
+
+    let array = flags.iter().map(|f| format!("\"{}\"", toml_escape(f))).collect::<Vec<_>>().join(", ");
+    Ok(Some(format!("target.\"{}\".rustflags=[{}]", cli.target, array)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_escapes_backslash_and_quote() {
+        assert_eq!(toml_escape("a\\b\"c"), "a\\\\b\\\"c");
+    }
+
+    #[test]
+    fn default_memory_x_has_mps2_layout() {
+        let m = default_memory_x("thumbv7em-none-eabihf");
+        assert!(m.contains("ORIGIN = 0x00000000"));
+        assert!(m.contains("ORIGIN = 0x20000000"));
+    }
+}
