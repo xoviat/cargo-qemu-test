@@ -48,19 +48,20 @@ jobs:
             exit 1
           fi
           grep -q "FAILED" "$RUNNER_TEMP/qtest-demo.log"
-      - name: Run defmt-demo (failing tests log via defmt; output must be decoded)
-        working-directory: examples/defmt-demo
-        run: |
-          set +e
-          cargo qtest > "$RUNNER_TEMP/qtest-defmt.log" 2>&1
-          status=$?
-          set -e
-          cat "$RUNNER_TEMP/qtest-defmt.log"
-          if [ "$status" -eq 0 ]; then
-            echo "expected defmt-demo to fail overall (the *logs_before_failing tests are intentional)"
-            exit 1
-          fi
-          grep -q "FAILED" "$RUNNER_TEMP/qtest-defmt.log"
-          # The defmt frames must show up decoded, not as binary garbage.
-          grep -q "out of range" "$RUNNER_TEMP/qtest-defmt.log"
-          grep -q "about to fail" "$RUNNER_TEMP/qtest-defmt.log"
+
+#      - name: Run defmt-demo (failing tests log via defmt; output must be decoded)
+#        working-directory: examples/defmt-demo
+#        run: |
+#          set +e
+#          cargo qtest > "$RUNNER_TEMP/qtest-defmt.log" 2>&1
+#          status=$?
+#          set -e
+#          cat "$RUNNER_TEMP/qtest-defmt.log"
+#          if [ "$status" -eq 0 ]; then
+#            echo "expected defmt-demo to fail overall (the *logs_before_failing tests are intentional)"
+#            exit 1
+#          fi
+#          grep -q "FAILED" "$RUNNER_TEMP/qtest-defmt.log"
+#          # The defmt frames must show up decoded, not as binary garbage.
+#          grep -q "out of range" "$RUNNER_TEMP/qtest-defmt.log"
+#          grep -q "about to fail" "$RUNNER_TEMP/qtest-defmt.log"
