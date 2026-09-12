@@ -51,12 +51,24 @@ pub fn qemu_for_target(target: &str) -> Option<QemuTarget> {
     })
 }
 
+/// Extra QEMU arguments implied by the machine defaults (must match the
+/// generated linker scripts, e.g. RAM size).
+pub fn default_board_args(target: &str) -> Vec<String> {
+    if target.starts_with("riscv") {
+        // Direct kernel boot: no OpenSBI, and 128 MiB to match the generated link script.
+        vec!["-bios".into(), "none".into(), "-m".into(), "128M".into()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Everything needed to launch QEMU for one test case.
 #[derive(Debug, Clone)]
 pub struct QemuOptions {
     pub binary: PathBuf,
     pub machine: String,
     pub cpu: Option<String>,
+    pub board_args: Vec<String>,
     pub extra_args: Vec<String>,
     pub timeout: Duration,
     pub verbose: bool,
@@ -74,6 +86,7 @@ pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> R
     if let Some(cpu) = &opts.cpu {
         cmd.arg("-cpu").arg(cpu);
     }
+    cmd.args(&opts.board_args);
     cmd.arg("-semihosting-config")
         .arg(format!("enable=on,target=native,arg=run_addr,arg={entrypoint}"))
         .arg("-nographic")

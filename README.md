@@ -42,6 +42,16 @@ $ rustup target add thumbv7em-none-eabihf
 $ sudo apt install qemu-system-arm
 ```
 
+## Examples
+
+| Example | Target(s) | Demonstrates |
+|---|---|---|
+| `examples/thumbv7em-demo` | `thumbv7em-none-eabihf` | classic Cortex-M setup; `fails_on_bug` intentionally fails |
+| `examples/dual-demo` | host **and** `thumbv7em-none-eabihf` | the same tests under `cargo test` (std, libtest-mimic) and `cargo qtest` (no_std, QEMU) |
+| `examples/riscv32imac-demo` | `riscv32imac-unknown-none-elf` | hand-rolled `_start`, no runtime crates; direct `qemu-system-riscv32 -bios none` boot |
+
+See `examples/thumbv7em-demo` for a complete working Cortex-M project.
+
 ## Setting up your firmware crate
 
 `cargo qtest` **handles the linker setup for you**. It inspects your dependency graph
@@ -148,6 +158,9 @@ Built-in target defaults:
 * **`qemu terminated by signal (guest crashed at boot …)`** — almost always a missing
   vector table: make sure `-Tlink.x` is passed *before* `-Tembedded-test.x` in build.rs,
   and verify with `readelf -S <elf> | grep vector_table`.
+* **Bare-metal RISC-V** needs no runtime crate: `cargo qtest` generates a minimal
+  linker script (RAM @ `0x80000000`, 128 MiB, `ENTRY(_start)`) and boots QEMU with
+  `-bios none -m 128M`. Your crate provides `_start` (see `examples/riscv32imac-demo`).
 * **Timeouts on every test** — the firmware isn't calling the semihosting exit: check the
   machine/cpu match your target (e.g. hard-float code on an FPU-less CPU).
 * **`cargo qtest` says "not an embedded-test binary"** — that test target lacks the
@@ -155,6 +168,22 @@ Built-in target defaults:
   `#[embedded_test::tests]`?
 * **No defmt/RTT logs** — QEMU only carries the semihosting console; use
   `semihosting::println!` (or keep logs feature-off) rather than RTT-based logging.
+
+## Dual host/embedded testing (`examples/dual-demo`)
+
+Cargo allows only one harness per target, so the example uses:
+
+* **target-gated dev-dependencies** — `embedded-test`/`cortex-m-rt` only for
+  `cfg(target_os = "none")`, `libtest-mimic` only for the host — so no std-only crate
+  ever compiles for `thumbv7em` and no semihosting crate ever compiles for the host;
+* **one `[[test]]` with `harness = false`** whose file cfg-switches between
+  `#[embedded_test::tests]` (target) and a libtest-mimic `main` (host, giving genuine
+  libtest-style output from plain `cargo test`), over **shared test cases**
+  (`pub const CASES` in the lib).
+
+One gotcha: cortex-m-rt must be a regular (target-gated) *dependency*, not a
+dev-dependency, because the lib itself uses it even when compiled as a dependency of
+the test targets (dev-dependencies are not in scope for that build).
 
 ## Notes & limitations
 

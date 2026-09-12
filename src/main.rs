@@ -37,6 +37,7 @@ fn main() -> Result<()> {
         binary,
         machine,
         cpu,
+        board_args: qemu::default_board_args(&args.target),
         extra_args: args.qemu_args.clone(),
         timeout: Duration::from_secs(args.timeout),
         verbose: args.verbose,
