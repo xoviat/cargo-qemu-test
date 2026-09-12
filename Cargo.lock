@@ -84,7 +84,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cargo-qtest"
+name = "cargo-qemu-test"
 version = "0.1.0"
 dependencies = [
  "anyhow",
