@@ -7,7 +7,7 @@ description = "Run embedded Rust test suites (embedded-test harness) under QEMU 
 license = "MIT OR Apache-2.0"
 keywords = ["cargo", "qemu", "embedded", "no_std", "testing"]
 categories = ["command-line-utilities", "development-tools::testing"]
-repository = "https://example.invalid/cargo-qtest"
+repository = "https://github.com/xoviat/cargo-qemu-test"
 
 [[bin]]
 name = "cargo-qtest"
