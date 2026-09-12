@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run host tests (incl. defmt encode/decode roundtrip)
+        run: cargo test --verbose
+
+  qemu-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: Install cargo-qtest
+        run: cargo install --path .
+      - name: Run thumbv7em-demo (fails_on_bug intentionally fails)
+        working-directory: examples/thumbv7em-demo
+        run: |
+          set +e
+          cargo qtest > "$RUNNER_TEMP/qtest-demo.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/qtest-demo.log"
+          if [ "$status" -eq 0 ]; then
+            echo "expected thumbv7em-demo to fail overall (fails_on_bug is intentional)"
+            exit 1
+          fi
+          grep -q "FAILED" "$RUNNER_TEMP/qtest-demo.log"
+      - name: Run defmt-demo (failing tests log via defmt; output must be decoded)
+        working-directory: examples/defmt-demo
+        run: |
+          set +e
+          cargo qtest > "$RUNNER_TEMP/qtest-defmt.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/qtest-defmt.log"
+          if [ "$status" -eq 0 ]; then
+            echo "expected defmt-demo to fail overall (the *logs_before_failing tests are intentional)"
+            exit 1
+          fi
+          grep -q "FAILED" "$RUNNER_TEMP/qtest-defmt.log"
+          # The defmt frames must show up decoded, not as binary garbage.
+          grep -q "out of range" "$RUNNER_TEMP/qtest-defmt.log"
+          grep -q "about to fail" "$RUNNER_TEMP/qtest-defmt.log"

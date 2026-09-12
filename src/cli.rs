@@ -62,6 +62,15 @@ pub struct Cli {
     #[arg(long, short)]
     pub verbose: bool,
 
+    /// Force defmt decoding of failed-test output; warn when a test ELF has no
+    /// `.defmt` section. By default decoding is auto-detected per ELF.
+    #[arg(long, conflicts_with = "no_defmt")]
+    pub defmt: bool,
+
+    /// Disable defmt decoding even when the test ELF contains a `.defmt` section.
+    #[arg(long)]
+    pub no_defmt: bool,
+
     /// Do not inject linker scripts (-Tlink.x / -Tembedded-test.x) and a default
     /// memory.x; use this if your build.rs already handles them.
     #[arg(long)]

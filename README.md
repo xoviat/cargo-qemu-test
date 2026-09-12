@@ -32,6 +32,11 @@ test result: FAILED. 4 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out
 4. Results are reported through [`libtest-mimic`](https://crates.io/crates/libtest-mimic),
    so filters, `--ignored`/`--include-ignored`, `--test-threads`, `--format json`, `--list`
    and friends behave like normal `cargo test`.
+5. When a test fails and the ELF contains a `.defmt` section (firmware logs with
+   defmt over the semihosting console, e.g. via `defmt-semihosting`), the captured
+   output is decoded with [`defmt-decoder`](https://crates.io/crates/defmt-decoder)
+   into readable log lines; plain-text output passes through untouched. Use
+   `--defmt`/`--no-defmt` to force or disable this per run.
 
 ## Installation
 
@@ -47,6 +52,7 @@ $ sudo apt install qemu-system-arm
 | Example | Target(s) | Demonstrates |
 |---|---|---|
 | `examples/thumbv7em-demo` | `thumbv7em-none-eabihf` | classic Cortex-M setup; `fails_on_bug` intentionally fails |
+| `examples/defmt-demo` | `thumbv7em-none-eabihf` | defmt logs over the semihosting console, decoded on failure |
 | `examples/dual-demo` | host **and** `thumbv7em-none-eabihf` | the same tests under `cargo test` (std, libtest-mimic) and `cargo qtest` (no_std, QEMU) |
 | `examples/riscv32imac-demo` | `riscv32imac-unknown-none-elf` | hand-rolled `_start`, no runtime crates; direct `qemu-system-riscv32 -bios none` boot |
 
@@ -140,6 +146,7 @@ $ cargo qtest --test-threads 1                 # serial QEMU runs
 | `--machine <M>` / `--cpu <C>` | QEMU `-M` / `-cpu` overrides |
 | `--qemu-arg <ARG>` | raw extra argument passed to QEMU (repeatable) |
 | `--timeout <SEC>` | per-test kill timeout (default 60) |
+| `--defmt` / `--no-defmt` | force (or disable) defmt decoding of failed-test output; default: auto-detect from the ELF's `.defmt` section |
 | `--verbose` | print each QEMU command line |
 
 Built-in target defaults:
@@ -166,8 +173,29 @@ Built-in target defaults:
 * **`cargo qtest` says "not an embedded-test binary"** — that test target lacks the
   `EMBEDDED_TEST_VERSION` symbol; did you set `harness = false` and use
   `#[embedded_test::tests]`?
-* **No defmt/RTT logs** — QEMU only carries the semihosting console; use
-  `semihosting::println!` (or keep logs feature-off) rather than RTT-based logging.
+* **defmt logs** — probe-based transports (RTT, ITM) don't work under QEMU, but
+  `defmt-semihosting` does: its encoded frames arrive on the semihosting console
+  and `cargo qtest` decodes them with `defmt-decoder` whenever a test fails
+  (auto-detected from the ELF's `.defmt` section; `--defmt`/`--no-defmt` to force).
+  Plain-text output still passes through as-is. See `examples/defmt-demo`.
+
+  Firmware requirements for decoding (all demonstrated in `examples/defmt-demo`):
+
+  - a timestamp provider (`defmt::timestamp!("{=u64:us}", expr)`) — defmt
+    requires exactly one per binary, else the link fails with an undefined
+    `_defmt_timestamp`;
+  - a `critical-section` backend (on single-core Cortex-M: `cortex-m` with the
+    `critical-section-single-core` feature, referenced via `use cortex_m as _;`)
+    — required by `defmt-semihosting`'s encoder;
+  - a linker script with `KEEP(*(.defmt .defmt.*))` in a `.defmt` output
+    section (see `examples/defmt-demo/defmt.x`). defmt-macros emits one input
+    section per interned string (`.defmt.<tag>.<json>`, 1 byte each); without
+    the merge+keep, rust-lld's `--gc-sections` drops them or leaves orphans
+    that don't match the decoder's exact `.defmt` section lookup, yielding
+    "defmt version found, but no `.defmt` section";
+  - exactly one defmt major in the graph — e.g. don't pair `defmt = "0.3"` with
+    `defmt-semihosting 0.3.0` (which depends on defmt `1.x`): two defmt
+    versions in one image is rejected with "multiple defmt versions in use".
 
 ## Dual host/embedded testing (`examples/dual-demo`)
 

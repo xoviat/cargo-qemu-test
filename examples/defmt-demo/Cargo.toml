@@ -1,0 +1,29 @@
+[package]
+name = "defmt-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# All dependencies at latest. defmt-semihosting 0.3.0 depends on defmt 1.x,
+# so the demo pins defmt = "1" too -- exactly one defmt major in the image
+# (mixing 0.3 + 1.x links two defmt versions and the decoder rejects the ELF).
+[dependencies]
+embedded-test = "0.7.2"
+cortex-m-rt = "0.7.6"
+cortex-m = { version = "0.7.9", features = ["critical-section-single-core"] }
+
+[dev-dependencies]
+defmt = "1"
+defmt-semihosting = "0.3"
+
+# embedded_test's `#[tests]` macro internally emits `cfg(rust_analyzer)`;
+# tell rustc it's expected so `unexpected_cfgs` stays quiet in CI.
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(rust_analyzer)"] }
+
+[lib]
+harness = false
+
+[[test]]
+name = "integration"
+harness = false

@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use libtest_mimic::Failed;
 
+use crate::defmt::DefmtInfo;
+use crate::elf::EmbeddedTest;
+
 /// QEMU defaults for a target triple.
 #[derive(Debug, Clone, Copy)]
 pub struct QemuTarget {
@@ -80,7 +83,12 @@ pub struct QemuOptions {
 /// `SYS_GET_CMDLINE` with `run_addr <entrypoint>`, the firmware runs the test and
 /// reports the outcome via `SYS_EXIT(_EXTENDED)`, which QEMU forwards as its own
 /// process exit code (0 = success, non-zero = failure/abort).
-pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> Result<(), Failed> {
+pub fn run_test_in_qemu(
+    opts: &QemuOptions,
+    kernel: &Path,
+    entrypoint: u64,
+    defmt: Option<&DefmtInfo>,
+) -> Result<(), Failed> {
     let mut cmd = Command::new(&opts.binary);
     cmd.arg("-M").arg(&opts.machine);
     if let Some(cpu) = &opts.cpu {
@@ -143,7 +151,7 @@ pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> R
                     return Err(Failed::from(format!(
                         "timed out after {}s (adjust with --timeout){}",
                         opts.timeout.as_secs(),
-                        output_tail(&output.lock().unwrap())
+                        output_report(&output.lock().unwrap(), defmt)
                     )));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -163,7 +171,7 @@ pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> R
         Some(0) => Ok(()),
         Some(code) => Err(Failed::from(format!(
             "firmware exited with status {code}{}",
-            output_tail(&output)
+            output_report(&output, defmt)
         ))),
         None => Err(Failed::from(
             "qemu terminated by signal (guest crashed at boot -- check vector table, target and machine setup)",
@@ -171,12 +179,22 @@ pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> R
     }
 }
 
-fn output_tail(output: &[u8]) -> String {
-    const MAX_BYTES: usize = 4000;
+/// Render the captured QEMU output shown when a test fails: decoded defmt log
+/// lines when the firmware uses defmt (the bytes on the semihosting console are
+/// encoded frames), otherwise the raw text tail.
+fn output_report(output: &[u8], defmt: Option<&DefmtInfo>) -> String {
     const MAX_LINES: usize = 20;
-    let start = output.len().saturating_sub(MAX_BYTES);
-    let text = String::from_utf8_lossy(&output[start..]);
-    let lines: Vec<&str> = text.lines().collect();
+    let lines: Vec<String> = match defmt {
+        Some(info) => info.decode_output(output),
+        None => {
+            const MAX_BYTES: usize = 4000;
+            let start = output.len().saturating_sub(MAX_BYTES);
+            String::from_utf8_lossy(&output[start..])
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+    };
     let tail = if lines.len() > MAX_LINES {
         &lines[lines.len() - MAX_LINES..]
     } else {
@@ -189,5 +207,27 @@ fn output_tail(output: &[u8]) -> String {
             "\n--- qemu output (tail) ---\n{}\n--- end ---",
             tail.join("\n")
         )
+    }
+}
+
+/// Run a single test case. A fresh QEMU instance acts as a device reset; the
+/// firmware's semihosting exit code decides the outcome. `should_panic` is
+/// inverted here because libtest-mimic 0.8 leaves it to the runner.
+pub fn run_one_test(
+    opts: &QemuOptions,
+    kernel: &Path,
+    test: &EmbeddedTest,
+    defmt: Option<&DefmtInfo>,
+) -> Result<(), libtest_mimic::Failed> {
+    let outcome = run_test_in_qemu(opts, kernel, test.entrypoint, defmt);
+    if test.should_panic {
+        match outcome {
+            Ok(()) => Err(libtest_mimic::Failed::from(
+                "test was expected to panic but exited successfully",
+            )),
+            Err(_) => Ok(()),
+        }
+    } else {
+        outcome
     }
 }

@@ -1,19 +1,14 @@
 use std::ffi::OsString;
-use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use cargo_qemu_test::cli::{self, Cli};
+use cargo_qemu_test::{compiler, defmt, elf, qemu};
 use clap::Parser;
-
-mod cli;
-mod compiler;
-mod elf;
-mod qemu;
 
 fn main() -> Result<()> {
     let (cli_args, harness_args) = cli::split_argv();
-    let args = cli::Cli::parse_from(std::iter::once(OsString::from("cargo-qtest")).chain(cli_args));
+    let args = Cli::parse_from(std::iter::once(OsString::from("cargo-qtest")).chain(cli_args));
 
     let artifacts = compiler::build_test_artifacts(&args)?;
 
@@ -21,7 +16,7 @@ fn main() -> Result<()> {
     let binary = args
         .qemu
         .clone()
-        .or_else(|| defaults.map(|d| PathBuf::from(d.system)))
+        .or_else(|| defaults.map(|d| d.system.into()))
         .with_context(|| {
             format!(
                 "don't know which QEMU binary fits target `{}` (pass --qemu)",
@@ -67,12 +62,18 @@ fn main() -> Result<()> {
             skipped_binaries.push(artifact);
             continue;
         };
+        let defmt_info = defmt::resolve(&args, &artifact.executable)?;
         if args.verbose || artifacts.len() > 1 {
             eprintln!(
-                "qtest: {}: {} test(s) in `{}`",
+                "qtest: {}: {} test(s) in `{}`{}",
                 artifact.target_name,
                 tests.len(),
-                artifact.executable.display()
+                artifact.executable.display(),
+                if defmt_info.is_some() {
+                    " (defmt output will be decoded on failure)"
+                } else {
+                    ""
+                }
             );
         }
         for test in tests {
@@ -81,7 +82,8 @@ fn main() -> Result<()> {
             let closure = {
                 let opts = qemu_opts.clone();
                 let kernel = artifact.executable.clone();
-                move || run_one_test(&opts, &kernel, test)
+                let defmt_info = defmt_info.clone();
+                move || qemu::run_one_test(&opts, &kernel, &test, defmt_info.as_ref())
             };
             trials.push(libtest_mimic::Trial::test(name, closure).with_ignored_flag(ignored));
         }
@@ -105,25 +107,4 @@ fn main() -> Result<()> {
     let mimic_args = libtest_mimic::Arguments::from_iter(mimic_argv);
 
     libtest_mimic::run(&mimic_args, trials).exit();
-}
-
-/// Run a single test case. A fresh QEMU instance acts as a device reset; the
-/// firmware's semihosting exit code decides the outcome. `should_panic` is
-/// inverted here because libtest-mimic 0.8 leaves it to the runner.
-fn run_one_test(
-    opts: &qemu::QemuOptions,
-    kernel: &Path,
-    test: elf::EmbeddedTest,
-) -> Result<(), libtest_mimic::Failed> {
-    let outcome = qemu::run_test_in_qemu(opts, kernel, test.entrypoint);
-    if test.should_panic {
-        match outcome {
-            Ok(()) => Err(libtest_mimic::Failed::from(
-                "test was expected to panic but exited successfully",
-            )),
-            Err(_) => Ok(()),
-        }
-    } else {
-        outcome
-    }
 }
