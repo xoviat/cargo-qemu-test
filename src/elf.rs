@@ -55,7 +55,9 @@ pub fn read_embedded_tests(path: &Path) -> Result<Option<Vec<EmbeddedTest>>> {
     let mut entrypoints: HashMap<String, u64> = HashMap::new();
 
     for symbol in file.symbols() {
-        let Ok(raw_name) = symbol.name() else { continue };
+        let Ok(raw_name) = symbol.name() else {
+            continue;
+        };
         if raw_name.is_empty() {
             continue;
         }
@@ -95,7 +97,11 @@ pub fn read_embedded_tests(path: &Path) -> Result<Option<Vec<EmbeddedTest>>> {
     let mut tests = Vec::new();
     let mut ambiguous = 0usize;
     for meta in metadata {
-        let bare = if meta.name.is_empty() { "<unknown>" } else { &meta.name };
+        let bare = if meta.name.is_empty() {
+            "<unknown>"
+        } else {
+            &meta.name
+        };
         let suffix = format!("::__{bare}_entrypoint");
         let mut candidates: Vec<(&String, &u64)> = entrypoints
             .iter()
@@ -133,7 +139,12 @@ pub fn read_embedded_tests(path: &Path) -> Result<Option<Vec<EmbeddedTest>>> {
                 (qualified_name(Some(module), bare), *addr)
             }
         };
-        tests.push(EmbeddedTest { name, ignored: meta.ignored, should_panic: meta.should_panic, entrypoint });
+        tests.push(EmbeddedTest {
+            name,
+            ignored: meta.ignored,
+            should_panic: meta.should_panic,
+            entrypoint,
+        });
     }
 
     if ambiguous > 0 {
@@ -160,9 +171,10 @@ mod tests {
 
     #[test]
     fn parses_metadata_json() {
-        let meta: TestMetadata =
-            serde_json::from_str(r#"{"name":"can_connect_sensor","ignored":false,"should_panic":false}"#)
-                .unwrap();
+        let meta: TestMetadata = serde_json::from_str(
+            r#"{"name":"can_connect_sensor","ignored":false,"should_panic":false}"#,
+        )
+        .unwrap();
         assert_eq!(meta.name, "can_connect_sensor");
         assert!(!meta.ignored);
         assert!(!meta.should_panic);
@@ -171,7 +183,8 @@ mod tests {
     #[test]
     fn metadata_ignores_unknown_fields() {
         let meta: TestMetadata =
-            serde_json::from_str(r#"{"name":"t","timeout":10,"ignored":true,"disambiguator":0}"#).unwrap();
+            serde_json::from_str(r#"{"name":"t","timeout":10,"ignored":true,"disambiguator":0}"#)
+                .unwrap();
         assert!(meta.ignored);
         assert!(!meta.should_panic);
     }

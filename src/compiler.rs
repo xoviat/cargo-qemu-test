@@ -3,7 +3,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use cargo_metadata::Message;
 
 use crate::cli::Cli;
@@ -24,9 +24,13 @@ pub fn build_test_artifacts(cli: &Cli) -> Result<Vec<TestArtifact>> {
     let mut cmd = Command::new(cargo);
     cmd.arg("--config");
     cmd.arg(linker_fixup_config(cli)?.unwrap_or_else(|| "build.rustflags=[]".to_string()));
-    cmd.args(["test", "--no-run", "--message-format=json-render-diagnostics"])
-        .arg("--target")
-        .arg(&cli.target);
+    cmd.args([
+        "test",
+        "--no-run",
+        "--message-format=json-render-diagnostics",
+    ])
+    .arg("--target")
+    .arg(&cli.target);
     if cli.release {
         cmd.arg("--release");
     }
@@ -75,7 +79,9 @@ pub fn build_test_artifacts(cli: &Cli) -> Result<Vec<TestArtifact>> {
             if !art.profile.test {
                 continue;
             }
-            let Some(executable) = art.executable else { continue };
+            let Some(executable) = art.executable else {
+                continue;
+            };
             let path = PathBuf::from(executable.as_std_path());
             if seen.insert(path.clone()) {
                 artifacts.push(TestArtifact {
@@ -165,7 +171,10 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
     };
 
     // Walk the dependency graph from the root package.
-    let resolve = metadata.resolve.as_ref().context("cargo metadata returned no resolve graph")?;
+    let resolve = metadata
+        .resolve
+        .as_ref()
+        .context("cargo metadata returned no resolve graph")?;
     let mut want_cortex_m_rt = false;
     let mut want_embedded_test = false;
     let mut stack = vec![root.id.clone()];
@@ -174,7 +183,9 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
         if !seen.insert(id.clone()) {
             continue;
         }
-        let Some(node) = resolve.nodes.iter().find(|n| n.id == id) else { continue };
+        let Some(node) = resolve.nodes.iter().find(|n| n.id == id) else {
+            continue;
+        };
         for dep in &node.deps {
             // NodeDep.name is the *target* name: underscores, not the package name's hyphens.
             let name = dep.name.replace('_', "-");
@@ -202,7 +213,12 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
     if want_cortex_m_rt {
         flags.push("-C".into());
         flags.push("link-arg=-Tlink.x".into());
-        let manifest_dir = root.manifest_path.parent().unwrap().as_std_path().to_path_buf();
+        let manifest_dir = root
+            .manifest_path
+            .parent()
+            .unwrap()
+            .as_std_path()
+            .to_path_buf();
         flags.push("-C".into());
         flags.push(format!("link-arg=-L{}", manifest_dir.display()));
         if !manifest_dir.join("memory.x").exists() {
@@ -219,7 +235,12 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
     if want_embedded_test && !want_cortex_m_rt && cli.target.starts_with("riscv") {
         // Bare-metal RISC-V: no runtime crate detected, so generate the minimal
         // layout our examples use (single RAM image for QEMU virt, -m 128M).
-        let manifest_dir = root.manifest_path.parent().unwrap().as_std_path().to_path_buf();
+        let manifest_dir = root
+            .manifest_path
+            .parent()
+            .unwrap()
+            .as_std_path()
+            .to_path_buf();
         let has_own_script = std::fs::read_dir(&manifest_dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
@@ -227,12 +248,17 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
             })
             .unwrap_or(false);
         if !has_own_script {
-            let dir = std::env::temp_dir()
-                .join(format!("cargo-qtest-link-{}", cli.target.replace(['-', '.'], "_")));
+            let dir = std::env::temp_dir().join(format!(
+                "cargo-qtest-link-{}",
+                cli.target.replace(['-', '.'], "_")
+            ));
             std::fs::create_dir_all(&dir)?;
             std::fs::write(dir.join("qtest-riscv.x"), riscv_link_script())?;
             flags.push("-C".into());
-            flags.push(format!("link-arg=-T{}", dir.join("qtest-riscv.x").display()));
+            flags.push(format!(
+                "link-arg=-T{}",
+                dir.join("qtest-riscv.x").display()
+            ));
         }
     }
     if want_embedded_test {
@@ -240,8 +266,15 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
         flags.push("link-arg=-Tembedded-test.x".into());
     }
 
-    let array = flags.iter().map(|f| format!("\"{}\"", toml_escape(f))).collect::<Vec<_>>().join(", ");
-    Ok(Some(format!("target.\"{}\".rustflags=[{}]", cli.target, array)))
+    let array = flags
+        .iter()
+        .map(|f| format!("\"{}\"", toml_escape(f)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Some(format!(
+        "target.\"{}\".rustflags=[{}]",
+        cli.target, array
+    )))
 }
 
 #[cfg(test)]

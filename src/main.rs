@@ -3,7 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 mod cli;
@@ -22,12 +22,22 @@ fn main() -> Result<()> {
         .qemu
         .clone()
         .or_else(|| defaults.map(|d| PathBuf::from(d.system)))
-        .with_context(|| format!("don't know which QEMU binary fits target `{}` (pass --qemu)", args.target))?;
+        .with_context(|| {
+            format!(
+                "don't know which QEMU binary fits target `{}` (pass --qemu)",
+                args.target
+            )
+        })?;
     let machine = args
         .machine
         .clone()
         .or_else(|| defaults.map(|d| d.machine.to_string()))
-        .with_context(|| format!("don't know which QEMU machine fits target `{}` (pass --machine)", args.target))?;
+        .with_context(|| {
+            format!(
+                "don't know which QEMU machine fits target `{}` (pass --machine)",
+                args.target
+            )
+        })?;
     let cpu = args
         .cpu
         .clone()
@@ -47,8 +57,12 @@ fn main() -> Result<()> {
     let mut skipped_binaries = Vec::new();
 
     for artifact in &artifacts {
-        let discovered = elf::read_embedded_tests(&artifact.executable)
-            .with_context(|| format!("failed to inspect test binary {}", artifact.executable.display()))?;
+        let discovered = elf::read_embedded_tests(&artifact.executable).with_context(|| {
+            format!(
+                "failed to inspect test binary {}",
+                artifact.executable.display()
+            )
+        })?;
         let Some(tests) = discovered else {
             skipped_binaries.push(artifact);
             continue;

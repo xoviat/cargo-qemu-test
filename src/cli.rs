@@ -9,7 +9,7 @@ use clap::Parser;
     bin_name = "cargo qtest",
     version,
     about = "Run embedded Rust test suites (embedded-test harness) under QEMU on a cross target",
-    disable_help_subcommand = true,
+    disable_help_subcommand = true
 )]
 pub struct Cli {
     /// Target triple to build for and emulate in QEMU.

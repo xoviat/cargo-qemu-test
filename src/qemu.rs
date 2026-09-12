@@ -88,7 +88,9 @@ pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> R
     }
     cmd.args(&opts.board_args);
     cmd.arg("-semihosting-config")
-        .arg(format!("enable=on,target=native,arg=run_addr,arg={entrypoint}"))
+        .arg(format!(
+            "enable=on,target=native,arg=run_addr,arg={entrypoint}"
+        ))
         .arg("-nographic")
         .arg("-kernel")
         .arg(kernel)
@@ -163,7 +165,9 @@ pub fn run_test_in_qemu(opts: &QemuOptions, kernel: &Path, entrypoint: u64) -> R
             "firmware exited with status {code}{}",
             output_tail(&output)
         ))),
-        None => Err(Failed::from("qemu terminated by signal (guest crashed at boot -- check vector table, target and machine setup)")),
+        None => Err(Failed::from(
+            "qemu terminated by signal (guest crashed at boot -- check vector table, target and machine setup)",
+        )),
     }
 }
 
@@ -181,6 +185,9 @@ fn output_tail(output: &[u8]) -> String {
     if tail.is_empty() {
         String::new()
     } else {
-        format!("\n--- qemu output (tail) ---\n{}\n--- end ---", tail.join("\n"))
+        format!(
+            "\n--- qemu output (tail) ---\n{}\n--- end ---",
+            tail.join("\n")
+        )
     }
 }
