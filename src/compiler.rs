@@ -138,6 +138,21 @@ fn riscv_link_script() -> &'static str {
 /// Default memory map for QEMU's MPS2 boards (mps2-an385/386/505): ZBTSRAM1
 /// aliased at 0x0 (boot window), ZBTSRAM2&3 at 0x20000000.
 fn default_memory_x(target: &str) -> &'static str {
+    // Chip layouts are derived from espressif/qemu's machine sources
+    // (hw/xtensa/esp32.c, esp32s3.c) so -kernel ELF loading lands where the
+    // emulated CPU can fetch: .vectors (exactly 0x400, 0x400-aligned) plus
+    // ROTEXT/RWTEXT inside the IRAM window, RODATA/RWDATA inside DRAM.
+    // Region names follow xtensa-lx-rt's link.x contract (INCLUDE memory.x);
+    // the stack symbol it references is provided at the top of DRAM.
+    if target.starts_with("xtensa-esp32-none") {
+        return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40080000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40080400, LENGTH = 0x3F800\n  RWTEXT (rwx) : ORIGIN = 0x400BC000, LENGTH = 0x4000\n  RODATA (r)   : ORIGIN = 0x3FFAE000, LENGTH = 0x29000\n  RWDATA (rw)  : ORIGIN = 0x3FFD7000, LENGTH = 0x29000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
+    }
+    if target.starts_with("xtensa-esp32s3-none") {
+        return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40370000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40370400, LENGTH = 0x7F800\n  RWTEXT (rwx) : ORIGIN = 0x403FF000, LENGTH = 0x8000\n  RODATA (r)   : ORIGIN = 0x3FC80000, LENGTH = 0xB8000\n  RWDATA (rw)  : ORIGIN = 0x3FD38000, LENGTH = 0xB8000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
+    }
+    if target.starts_with("xtensa-esp32s2-none") {
+        return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40020000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40020400, LENGTH = 0x37C00\n  RWTEXT (rwx) : ORIGIN = 0x40057C00, LENGTH = 0x4000\n  RODATA (r)   : ORIGIN = 0x3FFB0000, LENGTH = 0x28000\n  RWDATA (rw)  : ORIGIN = 0x3FFD8000, LENGTH = 0x28000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
+    }
     let _ = target; // same layout on all MPS2 variants
     "MEMORY\n{\n  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 4M\n  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 4M\n}\n"
 }
@@ -177,6 +192,8 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
         .context("cargo metadata returned no resolve graph")?;
     let mut want_cortex_m_rt = false;
     let mut want_embedded_test = false;
+    let mut want_xtensa_lx_rt = false;
+    let mut want_esp_hal = false;
     let mut stack = vec![root.id.clone()];
     let mut seen = std::collections::BTreeSet::new();
     while let Some(id) = stack.pop() {
@@ -192,6 +209,8 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
             match name.as_str() {
                 "cortex-m-rt" => want_cortex_m_rt = true,
                 "embedded-test" => want_embedded_test = true,
+                "xtensa-lx-rt" => want_xtensa_lx_rt = true,
+                "esp-hal" => want_esp_hal = true,
                 _ => {}
             }
             stack.push(dep.pkg.clone());
@@ -232,7 +251,38 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
             flags.push(format!("link-arg=-L{}", dir.display()));
         }
     }
-    if want_embedded_test && !want_cortex_m_rt && cli.target.starts_with("riscv") {
+    if want_xtensa_lx_rt && !want_esp_hal {
+        // Xtensa (esp32/s2/s3): xtensa-lx-rt's build script writes link.x into
+        // its OUT_DIR (which it link-searches) but never passes -Tlink.x --
+        // esp-hal normally does. Without it the link has no memory layout and
+        // silently produces an ELF linked at 0x0. esp-hal users are left alone:
+        // it provides its own scripts and memory regions.
+        flags.push("-C".into());
+        flags.push("link-arg=-Tlink.x".into());
+        let manifest_dir = root
+            .manifest_path
+            .parent()
+            .unwrap()
+            .as_std_path()
+            .to_path_buf();
+        flags.push("-C".into());
+        flags.push(format!("link-arg=-L{}", manifest_dir.display()));
+        if !manifest_dir.join("memory.x").exists() {
+            let dir = std::env::temp_dir().join(format!(
+                "cargo-qtest-memory-{}",
+                cli.target.replace(['-', '.'], "_")
+            ));
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("memory.x"), default_memory_x(&cli.target))?;
+            flags.push("-C".into());
+            flags.push(format!("link-arg=-L{}", dir.display()));
+        }
+    }
+    if want_embedded_test
+        && !want_cortex_m_rt
+        && !want_xtensa_lx_rt
+        && cli.target.starts_with("riscv")
+    {
         // Bare-metal RISC-V: no runtime crate detected, so generate the minimal
         // layout our examples use (single RAM image for QEMU virt, -m 128M).
         let manifest_dir = root
@@ -299,5 +349,19 @@ mod tests {
         let m = default_memory_x("thumbv7em-none-eabihf");
         assert!(m.contains("ORIGIN = 0x00000000"));
         assert!(m.contains("ORIGIN = 0x20000000"));
+    }
+
+    #[test]
+    fn default_memory_x_has_esp32_layout() {
+        let m = default_memory_x("xtensa-esp32-none-elf");
+        assert!(m.contains("ORIGIN = 0x40080000"));
+        assert!(m.contains("ORIGIN = 0x3FFAE000"));
+    }
+
+    #[test]
+    fn default_memory_x_has_esp32s3_layout() {
+        let m = default_memory_x("xtensa-esp32s3-none-elf");
+        assert!(m.contains("ORIGIN = 0x40370000"));
+        assert!(m.contains("ORIGIN = 0x3FC80000"));
     }
 }
