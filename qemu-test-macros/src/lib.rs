@@ -22,8 +22,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, spanned::Spanned, Attribute, Ident, Item, ItemFn, ItemMod, LitStr, Path,
-    Result, ReturnType, Token, Type, TypeTuple,
+    parse_macro_input,
+    spanned::Spanned,
+    Attribute, Ident, Item, ItemFn, ItemMod, LitStr, Path, Result, ReturnType, Token, Type,
+    TypeTuple,
 };
 
 /// Arguments of `#[test(init = some::path)]` (embedded-test 0.7 per-test init).
@@ -75,7 +77,10 @@ impl Parse for ShouldPanicArgs {
             }
             input.parse::<Token![=]>()?;
             if expected.is_some() {
-                return Err(syn::Error::new(name.span(), "duplicate `expected` argument"));
+                return Err(syn::Error::new(
+                    name.span(),
+                    "duplicate `expected` argument",
+                ));
             }
             expected = Some(input.parse()?);
             if input.peek(Token![,]) {
@@ -131,9 +136,9 @@ fn classify(item: &ItemFn) -> Result<FnAttrs> {
             if out.is_init {
                 return Err(syn::Error::new(attr.span(), "duplicate #[init]"));
             }
-            attr.meta.require_path_only().map_err(|_| {
-                syn::Error::new(attr.span(), "#[init] takes no arguments")
-            })?;
+            attr.meta
+                .require_path_only()
+                .map_err(|_| syn::Error::new(attr.span(), "#[init] takes no arguments"))?;
             out.is_init = true;
         } else if path_is(attr, "should_panic") {
             if out.should_panic.is_some() {
@@ -314,20 +319,19 @@ fn expand(input: ItemMod) -> Result<TokenStream2> {
         use ::qemu_test as embedded_test;
     })?;
     let mut et_items: Vec<Item> = vec![alias.clone()];
-    et_items.extend(items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Fn(f) => {
-                let cls = classify(f).ok()?;
-                if cls.host_only {
-                    return None;
-                }
-                let mut f = f.clone();
-                f.attrs.retain(|a| !(path_is(a, "host_only") || path_is(a, "target_only")));
-                Some(Item::Fn(f))
+    et_items.extend(items.iter().filter_map(|item| match item {
+        Item::Fn(f) => {
+            let cls = classify(f).ok()?;
+            if cls.host_only {
+                return None;
             }
-            other => Some(other.clone()),
-        }));
+            let mut f = f.clone();
+            f.attrs
+                .retain(|a| !(path_is(a, "host_only") || path_is(a, "target_only")));
+            Some(Item::Fn(f))
+        }
+        other => Some(other.clone()),
+    }));
     let et_mod = ItemMod {
         attrs: Vec::new(),
         vis: syn::Visibility::Inherited,
@@ -369,7 +373,11 @@ fn expand(input: ItemMod) -> Result<TokenStream2> {
     let mut trial_stmts: Vec<TokenStream2> = Vec::new();
     for t in &tests {
         let fn_ident = t.ident;
-        let name = quote!(::std::concat!(::std::stringify!(#mod_ident), "::", ::std::stringify!(#fn_ident)));
+        let name = quote!(::std::concat!(
+            ::std::stringify!(#mod_ident),
+            "::",
+            ::std::stringify!(#fn_ident)
+        ));
         let init_call: TokenStream2 = match &t.per_test_init {
             Some(p) => quote!(#p();),
             None => match &init {
@@ -564,7 +572,10 @@ mod tests {
         assert!(out.contains("both"), "{out}");
         let et_pos = out.find("embedded_tests").unwrap();
         let host_pos = out.rfind("host_thing").unwrap();
-        assert!(et_pos < host_pos, "host_only fn must not appear in the no_std twin: {out}");
+        assert!(
+            et_pos < host_pos,
+            "host_only fn must not appear in the no_std twin: {out}"
+        );
     }
 
     #[test]
@@ -580,7 +591,9 @@ mod tests {
         let out = expand(item).unwrap().to_string();
         assert!(out.contains("pokes_registers"), "{out}");
         assert!(
-            !out.contains("concat ! (stringify ! (tests) , \"::\" , stringify ! (pokes_registers))"),
+            !out.contains(
+                "concat ! (stringify ! (tests) , \"::\" , stringify ! (pokes_registers))"
+            ),
             "{out}"
         );
     }
@@ -612,30 +625,34 @@ mod tests {
 
     #[test]
     fn rejects_async_tests() {
-        let err = expand(syn::parse2(quote! {
-            mod tests {
-                #[test]
-                async fn networked() {}
-            }
-        })
-        .unwrap())
+        let err = expand(
+            syn::parse2(quote! {
+                mod tests {
+                    #[test]
+                    async fn networked() {}
+                }
+            })
+            .unwrap(),
+        )
         .unwrap_err();
         assert!(err.to_string().contains("async"), "{err}");
     }
 
     #[test]
     fn rejects_two_inits() {
-        let err = expand(syn::parse2(quote! {
-            mod tests {
-                #[init]
-                fn a() {}
-                #[init]
-                fn b() {}
-                #[test]
-                fn t() {}
-            }
-        })
-        .unwrap())
+        let err = expand(
+            syn::parse2(quote! {
+                mod tests {
+                    #[init]
+                    fn a() {}
+                    #[init]
+                    fn b() {}
+                    #[test]
+                    fn t() {}
+                }
+            })
+            .unwrap(),
+        )
         .unwrap_err();
         assert!(err.to_string().contains("at most one"), "{err}");
     }
