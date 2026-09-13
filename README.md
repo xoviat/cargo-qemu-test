@@ -54,6 +54,7 @@ $ sudo apt install qemu-system-arm
 | `examples/thumbv7em-demo` | `thumbv7em-none-eabihf` | classic Cortex-M setup; `fails_on_bug` intentionally fails |
 | `examples/defmt-demo` | `thumbv7em-none-eabihf` | defmt logs over the semihosting console, decoded on failure |
 | `examples/dual-demo` | host **and** `thumbv7em-none-eabihf` | the `qemu-test` macro: one `#[qemu_test::tests]` module run by both `cargo test` (std host) and `cargo qtest` (no_std, QEMU) |
+| `examples/xtensa-esp32-demo` | `xtensa-esp32-none-elf` | same pattern for Xtensa/ESP32: needs the Espressif Rust toolchain and the patched espressif QEMU fork (`docs/building-esp-qemu.md`) |
 | `examples/riscv32imac-demo` | `riscv32imac-unknown-none-elf` | hand-rolled `_start`, no runtime crates; direct `qemu-system-riscv32 -bios none` boot |
 
 See `examples/thumbv7em-demo` for a complete working Cortex-M project.

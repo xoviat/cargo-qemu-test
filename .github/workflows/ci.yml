@@ -52,6 +52,40 @@ jobs:
           grep -q "overflow_fails" "$RUNNER_TEMP/qtest-dual.log"
           grep -q "result: ok" "$RUNNER_TEMP/qtest-dual.log"
 
+  # Xtensa end-to-end: espressif QEMU (fork, patched) + Espressif Rust toolchain.
+  # Mirrors examples/xtensa-esp32-demo's expected flow; skipped if the runner
+  # image lacks either piece.
+  #  xtensa-esp32-qemu:
+  #    runs-on: ubuntu-latest
+  #    steps:
+  #      - uses: actions/checkout@v4
+  #      - uses: dtolnay/rust-toolchain@stable
+  #      - name: Try to install Espressif Rust toolchain (skipped if unavailable)
+  #        continue-on-error: true
+  #        run: |
+  #          cargo install espup
+  #          espup install --targets esp32
+  #          . ~/export-esp.sh
+  #          echo "ESP_TOOLCHAIN=ok" >> "$GITHUB_ENV"
+  #      - name: Try to install patched Espressif QEMU (skipped if unavailable)
+  #        continue-on-error: true
+  #        run: |
+  #          git clone --depth 1 -b esp-develop --recursive https://github.com/espressif/qemu
+  #          cd qemu && patch -p1 < "$GITHUB_WORKSPACE/docs/patches/0001-xtensa-openocd-semihosting.patch"
+  #          sudo apt-get update && sudo apt-get install -y libslirp-dev libgcrypt20-dev libgpg-error-dev ninja-build
+  #          ./configure --target-list=xtensa-softmmu --disable-werror --disable-docs \
+  #            --disable-sdl --disable-gtk --disable-vnc --disable-guest-agent --disable-user \
+  #            --disable-gnutls --disable-nettle --disable-capstone --disable-fdt \
+  #            --disable-alsa --disable-pa --disable-rdma --disable-libiscsi \
+  #            --disable-libnfs --disable-libssh
+  #          ninja -C build qemu-system-xtensa
+  #          echo "QEMU_XTENSA=$PWD/build/qemu-system-xtensa" >> "$GITHUB_ENV"
+  #      - name: Run xtensa-esp32-demo under QEMU
+  #        if: env.ESP_TOOLCHAIN == 'ok' && env.QEMU_XTENSA != ''
+  #        working-directory: examples/xtensa-esp32-demo
+  #        run: |
+  #          cargo qtest --target xtensa-esp32-none-elf --qemu "$QEMU_XTENSA" --verbose
+
   qemu-e2e:
     runs-on: ubuntu-latest
     steps:

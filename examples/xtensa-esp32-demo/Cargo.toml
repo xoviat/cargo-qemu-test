@@ -1,0 +1,28 @@
+[package]
+name = "xtensa-esp32-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# One suite via qemu-test, run by:
+#   `cargo test`  -> std host (libtest-mimic)
+#   `cargo qtest` -> no_std ESP32 under QEMU (espressif fork, patched;
+#                    see docs/building-esp-qemu.md)
+[lib]
+harness = false
+
+[[test]]
+name = "suite"
+harness = false
+
+[dev-dependencies]
+qemu-test = { path = "../../qemu-test" }
+
+# Xtensa runtime. Xtensa builds REQUIRE the Espressif Rust toolchain
+# (espup install --targets esp32); the standard rustup toolchain has no
+# xtensa-esp32-none-elf target. NOTE: xtensa-lx-rt does not satisfy
+# cargo-qtest's linker-fixup gate (it looks for cortex-m-rt), but
+# embedded-test -- pulled in by the qemu-test facade -- does, so
+# -Tembedded-test.x still reaches the linker.
+[target.'cfg(target_os = "none")'.dependencies]
+xtensa-lx-rt = "0.23"

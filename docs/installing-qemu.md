@@ -98,12 +98,23 @@ $ ./qemu-system-xtensa -machine help | grep esp32   # expect esp32/esp32s2/esp32
 ```
 
 cargo-qtest knows the Xtensa ESP32 family out of the box (see the target
-table in `src/qemu.rs`); build firmware with the Espressif Rust toolchain
-(`espup install --targets esp32`) and run:
+table in `src/qemu.rs`). Building the firmware needs the Espressif Rust
+toolchain -- standard rustup exposes the `xtensa-esp32-*` triples but, being
+tier-3, ships no prebuilt `core` (`error[E0463]: can't find crate for
+'core'`). Use espup:
+```console
+$ cargo install espup && espup install --targets esp32
+$ . ~/export-esp.sh
+```
+Then run:
 
 ```console
 $ cargo qtest --target xtensa-esp32-none-elf --qemu /path/to/qemu-system-xtensa
 ```
+
+Build pitfalls (submodule-less tarballs vs `--disable-slirp`, the mandatory
+libgcrypt, stale-mirror 404s, and the known-good configure invocation) are
+collected in `docs/building-esp-qemu.md`.
 
 Diagnostics: a silent hang at the first test means the trap encoding is
 wrong (re-check `XTENSA_SEMIHOST_INSN` against
