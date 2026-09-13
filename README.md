@@ -53,7 +53,7 @@ $ sudo apt install qemu-system-arm
 |---|---|---|
 | `examples/thumbv7em-demo` | `thumbv7em-none-eabihf` | classic Cortex-M setup; `fails_on_bug` intentionally fails |
 | `examples/defmt-demo` | `thumbv7em-none-eabihf` | defmt logs over the semihosting console, decoded on failure |
-| `examples/dual-demo` | host **and** `thumbv7em-none-eabihf` | the same tests under `cargo test` (std, libtest-mimic) and `cargo qtest` (no_std, QEMU) |
+| `examples/dual-demo` | host **and** `thumbv7em-none-eabihf` | the `qemu-test` macro: one `#[qemu_test::tests]` module run by both `cargo test` (std host) and `cargo qtest` (no_std, QEMU) |
 | `examples/riscv32imac-demo` | `riscv32imac-unknown-none-elf` | hand-rolled `_start`, no runtime crates; direct `qemu-system-riscv32 -bios none` boot |
 
 See `examples/thumbv7em-demo` for a complete working Cortex-M project.
@@ -197,21 +197,68 @@ Built-in target defaults:
     `defmt-semihosting 0.3.0` (which depends on defmt `1.x`): two defmt
     versions in one image is rejected with "multiple defmt versions in use".
 
-## Dual host/embedded testing (`examples/dual-demo`)
+## One suite, two harnesses: `qemu-test` (`examples/dual-demo`)
 
-Cargo allows only one harness per target, so the example uses:
+Writing the same tests twice — once wrapped in `#[embedded_test::tests]` for QEMU and
+once behind a hand-rolled libtest-mimic `main` for the host — means every test body,
+every `should_panic`, every `#[ignore]` carries a handwritten twin. The `qemu-test`
+crate (workspace members `qemu-test` + `qemu-test-macros`) removes that: you write one
+module, and the `#[qemu_test::tests]` attribute expands it into two cfg-gated twins
+plus a host harness:
 
-* **target-gated dev-dependencies** — `embedded-test`/`cortex-m-rt` only for
-  `cfg(target_os = "none")`, `libtest-mimic` only for the host — so no std-only crate
-  ever compiles for `thumbv7em` and no semihosting crate ever compiles for the host;
-* **one `[[test]]` with `harness = false`** whose file cfg-switches between
-  `#[embedded_test::tests]` (target) and a libtest-mimic `main` (host, giving genuine
-  libtest-style output from plain `cargo test`), over **shared test cases**
-  (`pub const CASES` in the lib).
+```rust
+#![cfg_attr(target_os = "none", no_std, no_main)]
 
-One gotcha: cortex-m-rt must be a regular (target-gated) *dependency*, not a
-dev-dependency, because the lib itself uses it even when compiled as a dependency of
-the test targets (dev-dependencies are not in scope for that build).
+#[qemu_test::tests]
+mod tests {
+    use my_fw::{add, CASES};
+
+    #[init]
+    fn init() {}
+
+    #[test]
+    fn shared_cases() {
+        for &(a, b, sum) in CASES {
+            assert_eq!(add(a, b), sum);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn overflow_fails() {
+        assert_eq!(add(i32::MAX, 1), i32::MAX);
+    }
+
+    #[test]
+    #[ignore]
+    fn skipped_example() {}
+}
+```
+
+* On `no_std` targets the module is passed through **verbatim** to
+  `#[embedded_test::tests]`, so `cargo qtest` discovers and runs it exactly as before
+  (fresh device boot per test, semihosting exit codes, defmt decoding — all unchanged).
+* On std hosts the same functions become `pub(crate)` items driven by a generated
+  libtest-mimic `main`, so plain `cargo test` gives genuine libtest-style output —
+  with the same trial names (`tests::shared_cases`) and the same `--ignored`,
+  `--format json`, filter flags on both sides.
+* `#[init]` runs before every test on both platforms; `#[should_panic(expected = "...")]`
+  is honored on the host too (matched against the panic payload, like std's libtest);
+  tests may return `Result<(), E>`.
+* `#[host_only]` / `#[target_only]` restrict a test to one platform when it genuinely
+  can't be portable (e.g. poking registers vs. using `std::fs`).
+
+The only setup left to you is the part Cargo enforces: `harness = false` on the
+`[lib]`/`[[test]]` targets (the harness is chosen per target, not per platform) and the
+firmware runtime as a target-gated regular dependency (cortex-m-rt must be a regular,
+not dev, dependency because the lib itself uses it when compiled as a dependency of the
+test targets). Everything harness-related — including the target-gated
+`embedded-test`/`libtest-mimic` dependencies — lives behind the `qemu-test` facade, and
+the facade pins the libtest-mimic version to the one `cargo-qtest` uses.
+
+Rules: one `#[qemu_test::tests]` module per test crate (each generates the host
+`main` — nest plain `mod`s inside it to organize); in `src/lib.rs` gate the module with
+`#[cfg(test)]`; test bodies must be `no_std`-portable unless gated.
 
 ## Notes & limitations
 

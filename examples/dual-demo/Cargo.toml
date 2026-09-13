@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# One test target, two harnesses:
-#   `cargo test`  -> std host run via libtest-mimic (libtest-compatible output)
-#   `cargo qtest` -> no_std embedded run via embedded-test under QEMU
+# One suite, written once via qemu-test, run by two commands:
+#   `cargo test`  -> std host, libtest-mimic harness (libtest-compatible output)
+#   `cargo qtest` -> no_std embedded, embedded-test harness under QEMU
 [lib]
 harness = false
 
@@ -14,15 +14,11 @@ harness = false
 name = "suite"
 harness = false
 
-# Target-gated dev-dependencies keep each side's crates off the other side's builds:
-# no std-only crates on thumbv7em, no semihosting crates on the host.
-# cortex-m-rt is a *regular* (target-gated) dependency: the lib itself uses it
-# (`use cortex_m_rt as _;`) even when compiled as a dependency of the test targets.
+[dev-dependencies]
+# The only harness dependency: embedded-test (QEMU side) and libtest-mimic
+# (host side) are both re-exported through this facade.
+qemu-test = { path = "../../qemu-test" }
+
+# The firmware runtime (vector table / reset handler) — only the target needs it.
 [target.'cfg(target_os = "none")'.dependencies]
 cortex-m-rt = "0.7.6"
-
-[target.'cfg(target_os = "none")'.dev-dependencies]
-embedded-test = "0.7.2"
-
-[target.'cfg(not(target_os = "none"))'.dev-dependencies]
-libtest-mimic = "0.8.2"

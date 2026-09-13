@@ -1,0 +1,23 @@
+[package]
+name = "qemu-test"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Write embedded Rust tests once and run them both on a std host (cargo test, via libtest-mimic) and under QEMU on a no_std target (cargo qtest, via embedded-test)"
+license = "MIT OR Apache-2.0"
+keywords = ["embedded", "testing", "qemu", "no_std", "harness"]
+categories = ["development-tools::testing", "embedded"]
+repository = "https://github.com/xoviat/cargo-qemu-test"
+
+[dependencies]
+qemu-test-macros = { version = "=0.1.0", path = "../qemu-test-macros" }
+
+# Harness runtime for each platform. Because this facade is a normal library
+# (not a proc-macro crate), these cfgs resolve against the *final* build target:
+# `embedded-test` is only compiled for bare-metal targets, `libtest-mimic` only
+# for std hosts. Users never write these target gates themselves.
+[target.'cfg(target_os = "none")'.dependencies]
+embedded-test = "0.7"
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
+libtest-mimic = "0.8"

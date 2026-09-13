@@ -18,9 +18,13 @@ use defmt_decoder::{DecodeError, Frame, Locations, Table};
 use crate::cli::Cli;
 
 /// defmt metadata extracted from a test ELF, ready to decode guest output.
+///
+/// `Table` is behind `Arc` because it is not `Clone` in newer defmt-decoder
+/// releases (it became an interner-owning type); sharing keeps `DefmtInfo`
+/// cheaply cloneable for `Cli`.
 #[derive(Clone)]
 pub struct DefmtInfo {
-    table: Table,
+    table: std::sync::Arc<Table>,
     /// DWARF locations of the log statements, when the ELF carries debug info.
     locations: Option<Locations>,
 }
@@ -40,7 +44,10 @@ impl DefmtInfo {
             return Ok(None);
         };
         let locations = table.get_locations(elf).ok().filter(|l| !l.is_empty());
-        Ok(Some(Self { table, locations }))
+        Ok(Some(Self {
+            table: std::sync::Arc::new(table),
+            locations,
+        }))
     }
 
     /// Decode captured guest output into printable lines.

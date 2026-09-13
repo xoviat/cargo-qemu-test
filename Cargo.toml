@@ -26,3 +26,10 @@ rustc-demangle = "0.1"
 
 [dev-dependencies]
 defmt = { version = "1", features = ["encoding-raw"] }
+
+[workspace]
+# qemu-test + qemu-test-macros ship with cargo-qtest and are built/tested by the
+# root `cargo test`. The example firmware crates stay standalone (they have their
+# own lockfiles and build for cross targets).
+members = ["qemu-test", "qemu-test-macros"]
+exclude = ["examples"]

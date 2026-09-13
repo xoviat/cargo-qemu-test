@@ -24,6 +24,34 @@ jobs:
       - name: Run host tests (incl. defmt encode/decode roundtrip)
         run: cargo test --verbose
 
+  dual-demo-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run dual-demo on the std host (qemu-test's libtest-mimic harness)
+        working-directory: examples/dual-demo
+        run: cargo test --verbose
+
+  dual-demo-qemu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: Install cargo-qtest
+        run: cargo install --path .
+      - name: Run dual-demo under QEMU (qemu-test's embedded-test harness)
+        working-directory: examples/dual-demo
+        run: |
+          cargo qtest --verbose 2>&1 | tee "$RUNNER_TEMP/qtest-dual.log"
+          grep -q "shared_cases" "$RUNNER_TEMP/qtest-dual.log"
+          grep -q "overflow_fails" "$RUNNER_TEMP/qtest-dual.log"
+          grep -q "result: ok" "$RUNNER_TEMP/qtest-dual.log"
+
   qemu-e2e:
     runs-on: ubuntu-latest
     steps:
