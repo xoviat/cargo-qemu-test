@@ -17,9 +17,7 @@ qemu-test-macros = { version = "=0.1.0", path = "../qemu-test-macros" }
 # `embedded-test` is only compiled for bare-metal targets, `libtest-mimic` only
 # for std hosts. Users never write these target gates themselves.
 [target.'cfg(target_os = "none")'.dependencies]
-# xtensa-semihosting selects the OpenOCD-style semihosting backend (the one our
-# QEMU patch implements); inert on ARM, where arm-compat is the default backend.
-embedded-test = { version = "0.7", features = ["xtensa-semihosting"] }
+embedded-test = "0.7"
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 libtest-mimic = "0.8"
