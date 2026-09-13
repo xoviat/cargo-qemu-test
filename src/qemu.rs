@@ -50,6 +50,23 @@ pub fn qemu_for_target(target: &str) -> Option<QemuTarget> {
             machine: "virt",
             cpu: None,
         },
+        // Xtensa: requires the Espressif QEMU fork (esp-develop), patched for
+        // OpenOCD-style semihosting -- see docs/installing-qemu.md#xtensa.
+        "xtensa-esp32-none-elf" => QemuTarget {
+            system: "qemu-system-xtensa",
+            machine: "esp32",
+            cpu: None,
+        },
+        "xtensa-esp32s2-none-elf" => QemuTarget {
+            system: "qemu-system-xtensa",
+            machine: "esp32s2",
+            cpu: None,
+        },
+        "xtensa-esp32s3-none-elf" => QemuTarget {
+            system: "qemu-system-xtensa",
+            machine: "esp32s3",
+            cpu: None,
+        },
         _ => return None,
     })
 }
@@ -229,5 +246,45 @@ pub fn run_one_test(
         }
     } else {
         outcome
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xtensa_targets_use_espressif_qemu() {
+        for (triple, machine) in [
+            ("xtensa-esp32-none-elf", "esp32"),
+            ("xtensa-esp32s2-none-elf", "esp32s2"),
+            ("xtensa-esp32s3-none-elf", "esp32s3"),
+        ] {
+            let t = qemu_for_target(triple).unwrap_or_else(|| panic!("{triple}"));
+            assert_eq!(t.system, "qemu-system-xtensa");
+            assert_eq!(t.machine, machine);
+            assert_eq!(t.cpu, None);
+        }
+    }
+
+    #[test]
+    fn arm_targets_still_resolve() {
+        let t = qemu_for_target("thumbv7em-none-eabihf").unwrap();
+        assert_eq!(t.system, "qemu-system-arm");
+        assert_eq!(t.machine, "mps2-an386");
+    }
+
+    #[test]
+    fn unknown_target_returns_none() {
+        assert!(qemu_for_target("bpf-unknown-none").is_none());
+    }
+
+    #[test]
+    fn xtensa_needs_no_board_args() {
+        assert!(default_board_args("xtensa-esp32-none-elf").is_empty());
+        assert_eq!(
+            default_board_args("riscv32imc-unknown-none-elf"),
+            ["-bios", "none", "-m", "128M"]
+        );
     }
 }

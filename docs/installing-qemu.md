@@ -78,3 +78,34 @@ $ qemu-system-arm -M mps2-an386 -cpu cortex-m4 -nographic     -semihosting-confi
 
 If `cargo qtest` reports `failed to spawn qemu-system-arm`, either install the
 package above or pass `--qemu /path/to/qemu-system-arm`.
+
+## Xtensa (ESP32/S2/S3): the Espressif QEMU fork + semihosting patch
+
+Upstream QEMU has no ESP32 machines; use https://github.com/espressif/qemu
+(branch `esp-develop`). Stock embedded-test firmware additionally needs the
+patch in `docs/patches/0001-xtensa-openocd-semihosting.patch`, which teaches
+QEMU's Xtensa core the OpenOCD-style ARM-compatible semihosting trap
+(`break 1, 14`) that the Rust `semihosting` crate emits — QEMU otherwise only
+listens to SIMCALL, which no Rust crate speaks.
+
+```console
+$ git clone --depth 1 -b esp-develop https://github.com/espressif/qemu
+$ cd qemu && patch -p1 < /path/to/cargo-qemu-test/docs/patches/0001-xtensa-openocd-semihosting.patch
+$ ./configure --target-list=xtensa-softmmu --disable-werror --disable-docs \
+      --disable-sdl --disable-gtk --disable-vnc --disable-guest-agent --disable-user
+$ make -j$(nproc)
+$ ./qemu-system-xtensa -machine help | grep esp32   # expect esp32/esp32s2/esp32s3
+```
+
+cargo-qtest knows the Xtensa ESP32 family out of the box (see the target
+table in `src/qemu.rs`); build firmware with the Espressif Rust toolchain
+(`espup install --targets esp32`) and run:
+
+```console
+$ cargo qtest --target xtensa-esp32-none-elf --qemu /path/to/qemu-system-xtensa
+```
+
+Diagnostics: a silent hang at the first test means the trap encoding is
+wrong (re-check `XTENSA_SEMIHOST_INSN` against
+`xtensa-esp32-elf-objdump -d` output); a verdict that is always "failed"
+means the register accessor offset in `arm-compat-semi.c` is wrong.
