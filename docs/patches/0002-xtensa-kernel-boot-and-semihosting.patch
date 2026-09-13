@@ -1,0 +1,222 @@
+--- a/target/xtensa/Kconfig
++++ b/target/xtensa/Kconfig
+@@ -1,3 +1,4 @@
+ config XTENSA
+     bool
+-    imply SEMIHOSTING if TCG
++	imply SEMIHOSTING if TCG
++	select ARM_COMPATIBLE_SEMIHOSTING if TCG
+--- a/target/xtensa/cpu.h
++++ b/target/xtensa/cpu.h
+@@ -810,4 +810,14 @@
+  * inputs are NaNs, false to pick the second.
+  */
+ void xtensa_use_first_nan(CPUXtensaState *env, bool use_first);
++static inline XtensaCPU *xtensa_env_get_cpu(CPUXtensaState *env)
++{
++    return container_of(env, XtensaCPU, env);
++}
++
++/* OpenOCD-style semihosting (xtensa-semi.c) */
++struct CPUXtensaState;
++bool xtensa_semihosting_openocd_trap(CPUXtensaState *env);
++void xtensa_semihosting_openocd(CPUXtensaState *env);
++
+ #endif
+--- a/target/xtensa/cpu.c
++++ b/target/xtensa/cpu.c
+@@ -110,7 +110,21 @@
+ #ifndef CONFIG_USER_ONLY
+     env->sregs[PS] = xtensa_option_enabled(env->config,
+             XTENSA_OPTION_INTERRUPT) ? 0x1f : 0x10;
++    /* Windowed-ABI guests (esp32/lx6 and up) need WOE from their very first
++     * instruction: xtensa-lx-rt's Reset begins with ENTRY, which requires
++     * PS.WOE=1/EXCM=0 to be legal at all (and the CWOE TB flag follows PS).
++     * ROM-based flows (IDF) set PS themselves; a -kernel direct entry has
++     * no ROM, so deliver the state real boot ROMs leave: WOE|UM. */
++    if (xtensa_option_enabled(env->config,
++                              XTENSA_OPTION_WINDOWED_REGISTER)) {
++        env->sregs[PS] = PS_WOE | PS_UM;
++    }
+     env->pending_irq_level = 0;
++    /* This core config's reset vector entry is 0x50000000, but the esp32
++     * machine installs its boot blob at the architectural reset vector;
++     * the blob itself parks the APP CPU (rsr.prid + waiti). Deliver the
++     * blob address on every reset. */
++    env->pc = 0x40000400;
+ #else
+     env->sregs[PS] = PS_UM | (3 << PS_RING_SHIFT);
+     if (xtensa_option_enabled(env->config,
+--- a/target/xtensa/xtensa-semi.c
++++ b/target/xtensa/xtensa-semi.c
+@@ -30,6 +30,7 @@
+ #include "chardev/char-fe.h"
+ #include "exec/helper-proto.h"
+ #include "semihosting/semihost.h"
++#include "semihosting/common-semi.h"
+ #include "qapi/error.h"
+ #include "qemu/log.h"
+ 
+@@ -435,3 +436,44 @@
+         break;
+     }
+ }
++
++/*
++ * OpenOCD-style (ARM-compatible) semihosting.
++ *
++ * Trap: `break 1, 14` (the instruction emitted by taiki-e/semihosting's
++ * arm_compat::xtensa backend, OpenOCD's esp_xtensa_semihosting, and
++ * probe-rs). a2 = op (ARM numbering: 0x01 open ... 0x15 get_cmdline,
++ * 0x18 exit, 0x20 exit_extended), a3 = pointer to the parameter block.
++ * Result is returned in a2, like ARM's r0. All op semantics (cmdline
++ * from -semihosting-config arg=, console writes to stdout, process exit
++ * with the guest status) come from the shared arm-compat core.
++ *
++ * `break n,m` is encoded 0x0040nm as a 24-bit little-endian instruction;
++ * `break 1,14` is therefore the word 0x00401e.
++ */
++
++#define XTENSA_SEMIHOST_INSN      0x0041e0u
++#define XTENSA_SEMIHOST_INSN_LEN  3
++
++bool xtensa_semihosting_openocd_trap(CPUXtensaState *env)
++{
++    CPUState *cs = CPU(xtensa_env_get_cpu(env));
++    uint8_t insn[3] = { 0 };
++
++    if (!semihosting_enabled(false)) {
++        return false;   /* deliver to the guest / gdbstub as before */
++    }
++    cpu_memory_rw_debug(cs, env->pc, insn, sizeof(insn), 0);
++    return (insn[0] | (insn[1] << 8) | (insn[2] << 16)) == XTENSA_SEMIHOST_INSN;
++}
++
++void xtensa_semihosting_openocd(CPUXtensaState *env)
++{
++    CPUState *cs = CPU(xtensa_env_get_cpu(env));
++
++    (void)do_common_semihosting(cs);  /* reads a2/a3 via the accessors,
++                                         writes the result back to a2;
++                                         SYS_EXIT never returns */
++    env->pc += XTENSA_SEMIHOST_INSN_LEN;
++    cs->exception_index = -1;
++}
+--- a/target/xtensa/exc_helper.c
++++ b/target/xtensa/exc_helper.c
+@@ -207,6 +207,12 @@
+ {
+     CPUXtensaState *env = cpu_env(cs);
+ 
++    /* OpenOCD-style semihosting trap: consume it here, never raise it. */
++    if (xtensa_semihosting_openocd_trap(env)) {
++        xtensa_semihosting_openocd(env);
++        return;
++    }
++
+     if (cs->exception_index == EXC_IRQ) {
+         qemu_log_mask(CPU_LOG_INT,
+                       "%s(EXC_IRQ) level = %d, cintlevel = %d, "
+--- a/hw/xtensa/esp32.c
++++ b/hw/xtensa/esp32.c
+@@ -865,17 +865,36 @@
+             uint8_t p[4];
+             memcpy(p, &elf_entry, 4);
+             uint8_t boot[] = {
+-                0x06, 0x01, 0x00,       /* j    1 */
+-                0x00,                   /* .literal_position */
+-                p[0], p[1], p[2], p[3], /* .literal elf_entry */
+-                                        /* 1: */
+-                0x01, 0xff, 0xff,       /* l32r a0, elf_entry */
+-                0xa0, 0x00, 0x00,       /* jx   a0 */
+-            };
++            0x06, 0x01, 0x00,       /* j    1                    */
++            0x00,                   /* .literal_position         */
++            p[0], p[1], p[2], p[3], /* .literal elf_entry        */
++                                    /* 1: */
++            0x01, 0x9f, 0xff,       /* l32r a9, elf_entry        */
++            0x80, 0xeb, 0x03,       /* rsr.prid a8               */
++            0xcc, 0x18,             /* bnez.n a8, 3f  (park APP core: prid != 0) */
++            0xe0, 0x09, 0x00,       /* callx8 a9                 */
++                                    /* 3: */
++            0x00, 0x7f, 0x00,       /* waiti 15  (park APP CPU)  */
++            0x46, 0xfe, 0xff,       /* j 3b                      */
++        };
+             // Write boot function to reset-vector address (0x40000400) of the CPU 0
+             rom_add_blob_fixed_as("boot", boot, sizeof(boot), XCHAL_RESET_VECTOR_PADDR, CPU(&ss->cpu[0])->as);
+             ss->cpu[0].env.pc = XCHAL_RESET_VECTOR_PADDR;
++            /* Deliver the app with a sane windowed-ABI PS: WOE=1, user mode,
++             * no exception state, interrupts unmasked. The reset blob
++             * transfers control with `jx` (CALLINC=0), and windowed code --
++             * e.g. xtensa-lx-rt's Reset, whose first instruction is ENTRY --
++             * is only legal/consistent with WOE set. Without this, ENTRY/RETW
++             * legality checks fire or the window frame is silently corrupt.
++             * (Same value real boot ROMs leave: WOE|UM = 0x40020.) */
++            ss->cpu[0].env.sregs[PS] = PS_WOE | PS_UM;
+         }
++
++        /* Park the APP CPU. Real silicon keeps it stalled (RTC_CNTL clock
++         * gate) until the PRO CPU starts it; our xtensa-lx-rt firmware is
++         * single-core and never does. Without this, cpu1 sits at PC=0,
++         * fault-storming in a tight loop that starves the PRO CPU under TCG
++         * round-robin scheduling -- guest execution slows by ~100x. */
+     } else {
+         char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "esp32-v3-rom.bin");
+         if (rom_binary == NULL) {
+--- /dev/null
++++ b/target/xtensa/common-semi-target.h
+@@ -0,0 +1,54 @@
++/*
++ * Target-specific parts of semihosting/arm-compat-semi.c for Xtensa.
++ *
++ * The OpenOCD-style semihosting interface used by the Rust `semihosting`
++ * crate (feature openocd-semihosting), OpenOCD, and probe-rs places the op
++ * in a2 and the parameter block in a3, with the result returned in a2 --
++ * a2 is the first argument register of the Xtensa ABI.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef TARGET_XTENSA_COMMON_SEMI_TARGET_H
++#define TARGET_XTENSA_COMMON_SEMI_TARGET_H
++
++static inline target_ulong common_semi_arg(CPUState *cs, int argno)
++{
++    XtensaCPU *cpu = XTENSA_CPU(cs);
++    CPUXtensaState *env = &cpu->env;
++
++    return env->regs[2 + argno];
++}
++
++static inline void common_semi_set_ret(CPUState *cs, target_ulong ret)
++{
++    XtensaCPU *cpu = XTENSA_CPU(cs);
++    CPUXtensaState *env = &cpu->env;
++
++    env->regs[2] = ret;
++}
++
++static inline bool common_semi_sys_exit_extended(CPUState *cs, int nr)
++{
++    return nr == TARGET_SYS_EXIT_EXTENDED;
++}
++
++static inline bool is_64bit_semihosting(CPUArchState *env)
++{
++    return false;
++}
++
++static inline target_ulong common_semi_stack_bottom(CPUState *cs)
++{
++    XtensaCPU *cpu = XTENSA_CPU(cs);
++    CPUXtensaState *env = &cpu->env;
++
++    return env->regs[1];    /* a1 = sp */
++}
++
++static inline bool common_semi_has_synccache(CPUArchState *env)
++{
++    return true;
++}
++
++#endif /* TARGET_XTENSA_COMMON_SEMI_TARGET_H */
