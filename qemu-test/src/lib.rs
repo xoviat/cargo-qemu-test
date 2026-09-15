@@ -116,3 +116,24 @@ pub use embedded_test::*;
 /// Not public API in the semver sense.
 #[cfg(not(target_os = "none"))]
 pub use libtest_mimic;
+
+/// Pull in cortex-m-rt for the rt feature
+#[cfg(all(feature = "rt", target_os = "none", target_arch = "arm"))]
+use cortex_m_rt as _;
+
+/// Add startup asm for riscv for the rt feature
+#[cfg(all(feature = "rt", target_os = "none", target_arch = "riscv32"))]
+core::arch::global_asm!(
+    r#"
+    .section .text._start, "ax", @progbits
+    .globl _start
+    .align 2
+_start:
+    .option push
+    .option norelax
+    la sp, _stack_top
+    .option pop
+    call main
+1:  j 1b
+"#
+);

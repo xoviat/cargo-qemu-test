@@ -9,6 +9,10 @@ keywords = ["embedded", "testing", "qemu", "no_std", "harness"]
 categories = ["development-tools::testing", "embedded"]
 repository = "https://github.com/xoviat/cargo-qemu-test"
 
+[features]
+default = ["rt"]
+rt = []
+
 [dependencies]
 qemu-test-macros = { version = "=0.1.0", path = "../qemu-test-macros" }
 
@@ -21,3 +25,6 @@ embedded-test = "0.7"
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 libtest-mimic = "0.8"
+
+[target.'cfg(all(feature="rt", target_os = "none",target_arch = "arm"))'.dependencies]
+cortex-m-rt = "0.7"
