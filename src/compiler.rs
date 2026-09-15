@@ -158,12 +158,7 @@ fn default_memory_x(target: &str) -> &'static str {
 }
 
 /// Build a `--config target.<triple>.rustflags=[...]` argument that injects the
-/// linker scripts required by embedded-test on Cortex-M targets:
-///
-/// * `-Tlink.x` (cortex-m-rt) -- its build script only adds a search path; without
-///   the script there is no vector table and the guest locks up at reset;
-/// * `-Tembedded-test.x` (embedded-test metadata section);
-/// * a default `memory.x` for the QEMU machine, when the crate has none at its root.
+/// linker scripts required by embedded-test on bare-metal targets:
 ///
 /// Returns `None` when nothing needs injecting.
 fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
@@ -190,9 +185,7 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
         .resolve
         .as_ref()
         .context("cargo metadata returned no resolve graph")?;
-    let mut want_cortex_m_rt = false;
     let mut want_embedded_test = false;
-    let mut want_xtensa_lx_rt = false;
     let mut want_esp_hal = false;
     let mut stack = vec![root.id.clone()];
     let mut seen = std::collections::BTreeSet::new();
@@ -207,21 +200,23 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
             // NodeDep.name is the *target* name: underscores, not the package name's hyphens.
             let name = dep.name.replace('_', "-");
             match name.as_str() {
-                "cortex-m-rt" => want_cortex_m_rt = true,
                 "embedded-test" => want_embedded_test = true,
-                "xtensa-lx-rt" => want_xtensa_lx_rt = true,
                 "esp-hal" => want_esp_hal = true,
                 _ => {}
             }
             stack.push(dep.pkg.clone());
         }
     }
-    if !want_cortex_m_rt && !want_embedded_test {
+    if !want_embedded_test {
         bail!(
-            "neither `cortex-m-rt` nor `embedded-test` found in the dependency graph of `{}`.\n             cargo-qtest only knows how to run embedded-test test suites.",
+            "`embedded-test` found in the dependency graph of `{}`.\n             cargo-qtest only knows how to run embedded-test test suites.",
             root.name
         );
     }
+
+    let target_arm = cli.target.starts_with("thumb");
+    let target_riscv = cli.target.starts_with("riscv");
+    let target_xtensa = cli.target.starts_with("xtensa");
 
     let mut flags: Vec<String> = std::env::var("RUSTFLAGS")
         .unwrap_or_default()
@@ -229,7 +224,7 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
         .map(str::to_string)
         .collect();
 
-    if want_cortex_m_rt {
+    if target_arm {
         flags.push("-C".into());
         flags.push("link-arg=-Tlink.x".into());
         let manifest_dir = root
@@ -251,7 +246,7 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
             flags.push(format!("link-arg=-L{}", dir.display()));
         }
     }
-    if want_xtensa_lx_rt && !want_esp_hal {
+    if target_xtensa && !want_esp_hal {
         // Xtensa (esp32/s2/s3): xtensa-lx-rt's build script writes link.x into
         // its OUT_DIR (which it link-searches) but never passes -Tlink.x --
         // esp-hal normally does. Without it the link has no memory layout and
@@ -278,11 +273,7 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
             flags.push(format!("link-arg=-L{}", dir.display()));
         }
     }
-    if want_embedded_test
-        && !want_cortex_m_rt
-        && !want_xtensa_lx_rt
-        && cli.target.starts_with("riscv")
-    {
+    if target_riscv {
         // Bare-metal RISC-V: no runtime crate detected, so generate the minimal
         // layout our examples use (single RAM image for QEMU virt, -m 128M).
         let manifest_dir = root

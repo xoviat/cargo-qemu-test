@@ -1,8 +1,8 @@
 [package]
 name = "cargo-qemu-test"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.90"
 description = "Run embedded Rust test suites (embedded-test harness) under QEMU on cross targets such as thumbv7em-none-eabihf"
 license = "MIT OR Apache-2.0"
 keywords = ["cargo", "qemu", "embedded", "no_std", "testing"]
