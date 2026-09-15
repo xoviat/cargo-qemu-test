@@ -153,6 +153,13 @@ fn default_memory_x(target: &str) -> &'static str {
     if target.starts_with("xtensa-esp32s2-none") {
         return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40020000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40020400, LENGTH = 0x37C00\n  RWTEXT (rwx) : ORIGIN = 0x40057C00, LENGTH = 0x4000\n  RODATA (r)   : ORIGIN = 0x3FFB0000, LENGTH = 0x28000\n  RWDATA (rw)  : ORIGIN = 0x3FFD8000, LENGTH = 0x28000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
     }
+    // SSE-200 (mps2-an505/an519/an521): QEMU loads -kernel into SSRAM-2 at 0x0
+    // (2 MiB, mirrored at 0x10000000); the 4 MiB SSRAM-0 at 0x30000000 is the
+    // main RAM. Only 32 KiB (SRAM0) sits at 0x20000000, so it must not be used
+    // as a multi-MiB stack region -- exception-entry stacking faults otherwise.
+    if target.starts_with("thumbv8m") {
+        return "MEMORY\n{\n  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 2M\n  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 32K\n}\n";
+    }
     let _ = target; // same layout on all MPS2 variants
     "MEMORY\n{\n  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 4M\n  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 4M\n}\n"
 }
@@ -312,10 +319,27 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
         .map(|f| format!("\"{}\"", toml_escape(f)))
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(Some(format!(
-        "target.\"{}\".rustflags=[{}]",
-        cli.target, array
-    )))
+
+    // Deliver the rustflags through a TOML config file with cfg()-based target
+    // tables. cargo (at least 1.98) silently ignores rustflags keyed by a
+    // dotted target triple such as `target."thumbv8m.main-none-eabihf"` -- both
+    // via CLI `--config` (whose dotted-key parser also mangles quoted keys) and
+    // via config files. The firmware then links without -Tlink.x /
+    // -Tembedded-test.x and the embedded-test metadata sections (which carry no
+    // SHF_GNU_RETAIN) are garbage-collected, so the runner reports "missing
+    // EMBEDDED_TEST_VERSION". cfg() keys parse and match correctly, and never
+    // apply to host build units. qtest always invokes cargo with a single
+    // --target, so one table per supported target_arch is exact.
+    let mut toml = String::new();
+    for arch in ["arm", "riscv32", "riscv64", "xtensa", "aarch64"] {
+        toml.push_str(&format!(
+            "[target.'cfg(target_arch = \"{arch}\")']\nrustflags=[{array}]\n\n"
+        ));
+    }
+    let config_path =
+        std::env::temp_dir().join(format!("cargo-qtest-config-{}.toml", std::process::id()));
+    std::fs::write(&config_path, toml)?;
+    Ok(Some(config_path.display().to_string()))
 }
 
 #[cfg(test)]
