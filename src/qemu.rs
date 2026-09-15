@@ -197,7 +197,7 @@ pub fn run_test_in_qemu(
     if let Some(port) = mon_port {
         use std::io::{Read, Write};
         let mut last_err = String::new();
-        for attempt in 0..5 {
+        for _ in 0..5 {
             let mut s = match std::net::TcpStream::connect(("127.0.0.1", port)) {
                 Ok(s) => s,
                 Err(e) => {
