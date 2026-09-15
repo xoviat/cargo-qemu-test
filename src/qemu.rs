@@ -159,17 +159,56 @@ pub fn run_test_in_qemu(
     })?;
 
     if let Some(sock) = &mon_sock {
-        for _ in 0..50 {
-            if sock.exists() {
+        use std::io::{Read, Write};
+        let mut last_err = String::new();
+        for attempt in 0..5 {
+            let mut s = match std::os::unix::net::UnixStream::connect(sock) {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = format!("connect: {e}");
+                    std::thread::sleep(Duration::from_millis(150));
+                    continue;
+                }
+            };
+            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+            let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
+            if let Err(e) = s.write_all(b"system_reset\n") {
+                last_err = format!("write system_reset: {e}");
+                continue;
+            }
+            std::thread::sleep(Duration::from_millis(400));
+            if let Err(e) = s.write_all(b"cont\n") {
+                last_err = format!("write cont: {e}");
+                continue;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            if s.write_all(b"info status\n").is_err() {
+                last_err = "write info status".into();
+                continue;
+            }
+            let mut buf = [0u8; 1024];
+            let mut got = Vec::new();
+            for _ in 0..10 {
+                match s.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        got.extend_from_slice(&buf[..n]);
+                        if got.len() > 64 {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let reply = String::from_utf8_lossy(&got).to_lowercase();
+            if reply.contains("running") {
+                last_err.clear();
                 break;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            last_err = format!("unexpected status reply: {reply:?}");
         }
-        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(sock) {
-            use std::io::Write;
-            let _ = s.write_all(b"system_reset\n");
-            std::thread::sleep(Duration::from_millis(200));
-            let _ = s.write_all(b"cont\n");
+        if !last_err.is_empty() {
+            eprintln!("cargo-qtest: monitor handshake failed: {last_err}");
         }
         let _ = std::fs::remove_file(sock);
     }
