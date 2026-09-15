@@ -15,6 +15,31 @@ test thumbv7em_demo::tests::panics_as_expected ... ok
 test result: FAILED. 4 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out
 ```
 
+## Requirements
+
+### QEMU
+
+Install QEMU's system emulators through your distribution:
+
+```console
+# Debian / Ubuntu (GitHub Actions `ubuntu-latest` ships QEMU 8.2.x)
+$ sudo apt install qemu-system-arm qemu-system-riscv qemu-system-misc
+```
+
+Supported per target family:
+
+| Target family | QEMU machine | Minimum version |
+|---|---|---|
+| `thumbv6m`/`thumbv7m`/`thumbv7em` | `mps2-an385`/`mps2-an386` | any recent |
+| `thumbv8m.*` | `mps2-an505` | **8.0** |
+| `riscv32*`/`riscv64*` | `virt` | any recent |
+| `xtensa-esp32*` | `esp32`/`esp32s2`/`esp32s3` | any recent |
+
+`thumbv8m` targets are rejected with an explanatory error on QEMU < 8.0: the
+SSE-200 memory map changed in QEMU 8.0 (the SSRAM banks moved), so the
+linker script this runner generates no longer matches older releases. The
+thumbv8m matrix is verified against QEMU 8.2.x.
+
 ## How it works
 
 1. `cargo test --no-run --target <triple> --message-format=json` cross-compiles every

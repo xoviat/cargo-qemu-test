@@ -102,12 +102,42 @@ pub struct QemuOptions {
 /// `SYS_GET_CMDLINE` with `run_addr <entrypoint>`, the firmware runs the test and
 /// reports the outcome via `SYS_EXIT(_EXTENDED)`, which QEMU forwards as its own
 /// process exit code (0 = success, non-zero = failure/abort).
+fn parse_qemu_version(text: &str) -> Option<(u32, u32)> {
+    let tail = text.split("version ").nth(1)?;
+    let (maj, rest) = tail.split_once('.')?;
+    let min: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    Some((maj.parse().ok()?, min.parse().ok()?))
+}
+
+/// Parse `<qemu-binary> --version` into `(major, minor)`.
+fn qemu_version(binary: &Path) -> Option<(u32, u32)> {
+    let out = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .ok()?;
+    parse_qemu_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Minimum `qemu-system-arm` for the TZ MPS2 boards (`mps2-an505`/`an519`/`an521`).
+///
+/// Older releases use a different SSE-200 memory map (the SSRAM banks moved in
+/// QEMU 8.0) and are not supported; this matrix is verified against QEMU 8.2.x,
+/// the version `apt install qemu-system-arm` provides on Ubuntu 24.04 /
+/// GitHub Actions `ubuntu-latest`.
+const MIN_MPS2TZ_QEMU: (u32, u32) = (8, 0);
+
 pub fn run_test_in_qemu(
     opts: &QemuOptions,
     kernel: &Path,
     entrypoint: u64,
     defmt: Option<&DefmtInfo>,
 ) -> Result<(), Failed> {
+    if opts.machine.starts_with("mps2-an5") {
+        let ver = qemu_version(&opts.binary).unwrap_or((0, 0));
+        if ver < MIN_MPS2TZ_QEMU {
+            return Err(format!( "{} is too old for {} (found {}.{}, need >= {}.{}): the SSE-200 memory map differs before QEMU 8.0. Install qemu-system-arm >= 8.0 (see README: `apt install qemu-system-arm` on Ubuntu 24.04 / GitHub Actions `ubuntu-latest`).", opts.binary.display(), opts.machine, ver.0, ver.1, MIN_MPS2TZ_QEMU.0, MIN_MPS2TZ_QEMU.1, ) .into());
+        }
+    }
     let mut cmd = Command::new(&opts.binary);
     cmd.arg("-M").arg(&opts.machine);
     if let Some(cpu) = &opts.cpu {
@@ -330,6 +360,17 @@ pub fn run_one_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qemu_version_parses() {
+        // format: "QEMU emulator version 8.2.2 (Debian 1:8.2.2+dfsg-0ubuntu1)"
+        assert_eq!(
+            parse_qemu_version("QEMU emulator version 8.2.2 (Debian ...)"),
+            Some((8, 2))
+        );
+        assert_eq!(parse_qemu_version("QEMU emulator version 9.0.0"), Some((9, 0)));
+        assert_eq!(parse_qemu_version("no version here"), None);
+    }
 
     #[test]
     fn xtensa_targets_use_espressif_qemu() {
