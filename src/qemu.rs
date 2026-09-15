@@ -159,16 +159,22 @@ pub fn run_test_in_qemu(
     // (-S) and drive a monitor socket with system_reset (re-latches SP/PC from
     // the now-loaded vector table) followed by cont.
     let tz_reset = opts.machine.starts_with("mps2-an5");
-    let mon_sock = if tz_reset {
-        let p = std::env::temp_dir().join(format!(
-            "qtest-mon-{}-{entrypoint}.sock",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&p);
+    // Use a TCP monitor socket (loopback, ephemeral port): it works on Unix
+    // and Windows alike, unlike a unix-domain socket.
+    let mon_port: Option<u16> = if tz_reset {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| {
+            Failed::from(format!("failed to reserve a monitor port for QEMU: {e}"))
+        })?;
+        let port = listener.local_addr().map_err(|e| {
+            Failed::from(format!("failed to query monitor port for QEMU: {e}"))
+        })?.port();
+        // Release the port so QEMU can re-bind it; the retry loop in the
+        // handshake below tolerates the brief race.
+        drop(listener);
         cmd.arg("-S")
             .arg("-monitor")
-            .arg(format!("unix:{},server,nowait", p.display()));
-        Some(p)
+            .arg(format!("tcp:127.0.0.1:{port},server,nowait"));
+        Some(port)
     } else {
         None
     };
@@ -188,11 +194,11 @@ pub fn run_test_in_qemu(
         ))
     })?;
 
-    if let Some(sock) = &mon_sock {
+    if let Some(port) = mon_port {
         use std::io::{Read, Write};
         let mut last_err = String::new();
         for attempt in 0..5 {
-            let mut s = match std::os::unix::net::UnixStream::connect(sock) {
+            let mut s = match std::net::TcpStream::connect(("127.0.0.1", port)) {
                 Ok(s) => s,
                 Err(e) => {
                     last_err = format!("connect: {e}");
@@ -240,7 +246,6 @@ pub fn run_test_in_qemu(
         if !last_err.is_empty() {
             eprintln!("cargo-qtest: monitor handshake failed: {last_err}");
         }
-        let _ = std::fs::remove_file(sock);
     }
 
     // Capture QEMU's stdio (serial + semihosting console) so it cannot deadlock,
