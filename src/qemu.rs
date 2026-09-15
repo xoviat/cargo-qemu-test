@@ -162,12 +162,12 @@ pub fn run_test_in_qemu(
     // Use a TCP monitor socket (loopback, ephemeral port): it works on Unix
     // and Windows alike, unlike a unix-domain socket.
     let mon_port: Option<u16> = if tz_reset {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| {
-            Failed::from(format!("failed to reserve a monitor port for QEMU: {e}"))
-        })?;
-        let port = listener.local_addr().map_err(|e| {
-            Failed::from(format!("failed to query monitor port for QEMU: {e}"))
-        })?.port();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| Failed::from(format!("failed to reserve a monitor port for QEMU: {e}")))?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| Failed::from(format!("failed to query monitor port for QEMU: {e}")))?
+            .port();
         // Release the port so QEMU can re-bind it; the retry loop in the
         // handshake below tolerates the brief race.
         drop(listener);
@@ -373,7 +373,10 @@ mod tests {
             parse_qemu_version("QEMU emulator version 8.2.2 (Debian ...)"),
             Some((8, 2))
         );
-        assert_eq!(parse_qemu_version("QEMU emulator version 9.0.0"), Some((9, 0)));
+        assert_eq!(
+            parse_qemu_version("QEMU emulator version 9.0.0"),
+            Some((9, 0))
+        );
         assert_eq!(parse_qemu_version("no version here"), None);
     }
 
