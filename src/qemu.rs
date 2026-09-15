@@ -30,11 +30,13 @@ pub fn qemu_for_target(target: &str) -> Option<QemuTarget> {
             machine: "mps2-an386",
             cpu: Some("cortex-m4"),
         },
-        "thumbv8m.main-none-eabi" | "thumbv8m.main-none-eabihf" => QemuTarget {
-            system: "qemu-system-arm",
-            machine: "mps2-an505",
-            cpu: Some("cortex-m33"),
-        },
+        "thumbv8m.base-none-eabi" | "thumbv8m.main-none-eabi" | "thumbv8m.main-none-eabihf" => {
+            QemuTarget {
+                system: "qemu-system-arm",
+                machine: "mps2-an505",
+                cpu: Some("cortex-m33"),
+            }
+        }
         "aarch64-unknown-none" | "aarch64-unknown-none-softfloat" => QemuTarget {
             system: "qemu-system-aarch64",
             machine: "virt",
@@ -120,6 +122,27 @@ pub fn run_test_in_qemu(
         .arg("-kernel")
         .arg(kernel)
         .args(&opts.extra_args);
+
+    // QEMU <= 7.x mps2-tz machines latch the initial SP/PC before -kernel is
+    // loaded ("Loaded reset SP 0x0 PC 0x0 from vector table"), so the CPU
+    // starts executing zeroed memory and lockups. Work around: start halted
+    // (-S) and drive a monitor socket with system_reset (re-latches SP/PC from
+    // the now-loaded vector table) followed by cont.
+    let tz_reset = opts.machine.starts_with("mps2-an5");
+    let mon_sock = if tz_reset {
+        let p = std::env::temp_dir().join(format!(
+            "qtest-mon-{}-{entrypoint}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p);
+        cmd.arg("-S")
+            .arg("-monitor")
+            .arg(format!("unix:{},server,nowait", p.display()));
+        Some(p)
+    } else {
+        None
+    };
+
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -134,6 +157,22 @@ pub fn run_test_in_qemu(
             opts.binary.display()
         ))
     })?;
+
+    if let Some(sock) = &mon_sock {
+        for _ in 0..50 {
+            if sock.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(sock) {
+            use std::io::Write;
+            let _ = s.write_all(b"system_reset\n");
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = s.write_all(b"cont\n");
+        }
+        let _ = std::fs::remove_file(sock);
+    }
 
     // Capture QEMU's stdio (serial + semihosting console) so it cannot deadlock,
     // and show the tail of it whenever a test fails.
@@ -272,6 +311,14 @@ mod tests {
         let t = qemu_for_target("thumbv7em-none-eabihf").unwrap();
         assert_eq!(t.system, "qemu-system-arm");
         assert_eq!(t.machine, "mps2-an386");
+
+        // thumbv8m triples contain dots; both profiles share the an505/M33 board.
+        for triple in ["thumbv8m.base-none-eabi", "thumbv8m.main-none-eabihf"] {
+            let t = qemu_for_target(triple).unwrap();
+            assert_eq!(t.system, "qemu-system-arm");
+            assert_eq!(t.machine, "mps2-an505");
+            assert_eq!(t.cpu.as_deref(), Some("cortex-m33"));
+        }
     }
 
     #[test]
