@@ -70,8 +70,6 @@ jobs:
           - xtensa-esp32-none-elf
           - xtensa-esp32s3-none-elf
     runs-on: ${{ matrix.os }}
-    env:
-      CARGO_QTEST_CACHE_DIR: ${{ runner.temp }}/cargo-qtest
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust for Xtensa
@@ -102,6 +100,7 @@ jobs:
         env:
           CARGO_UNSTABLE_BUILD_STD: core
           CARGO_UNSTABLE_BUILD_STD_FEATURES: compiler-builtins-mem
+          CARGO_QTEST_CACHE_DIR: ${{ runner.temp }}/cargo-qtest
         run: |
           cargo qtest --target ${{ matrix.target }} --verbose
 
