@@ -36,26 +36,21 @@ suite.rs (#[qemu_test::tests])
 - Host side (`cargo test` on the same suite) passes via the generated
   libtest-mimic harness, as on ARM.
 
-## The one open item: QEMU's strict ENTRY check
+## Resolved: QEMU semihosting trap return & windowed register reset
 
-Symptom: `shared_cases` (success-path test) hangs; trace shows
-`Illegal entry instruction (pc = 0x400BC0A4)` with a0 == pc, then the ROM
-deadloop. 0x400BC0A4 is `Reset`; bytes there are `ENTRY a1, 64`.
+Root cause and fix:
+1. Semihosting trap return: In `target/xtensa/xtensa-semi.c`, OpenOCD semihosting traps
+   now restore `PS` from `env->sregs[EPS2 + level - 2]`, clearing `PS.EXCM = 0` and
+   restoring the interrupted interrupt level.
+2. Windowed register reset: On CPU reset (`target/xtensa/cpu.c`), `WINDOW_BASE = 0`,
+   `WINDOW_START = 1`, and `PS = PS_WOE | PS_UM` are initialized for windowed-ABI guests.
+3. Secondary CPU parking: In `hw/xtensa/esp32.c` and `esp32s3.c`, a boot blob installs
+   a loop parking the APP core (`waiti 15; j 0`) under SMP so it does not starve CPU 0.
 
-Theory (fits all data): embedded-test's xtensa runner reboots the CPU after
-a SUCCESSFUL test via a software jump to Reset (`movi a0, Reset; jx a0`-ish,
-hence a0 == pc). QEMU's translate.c raises EXCP_ILLEGAL for ENTRY when it is
-not preceded by a call (a0 != pc-3 / window precondition). Real silicon
-tolerates ENTRY after a plain jump. The panic path (overflow_fails) calls
-process::exit and never reboots, which is why only success-path tests die.
-
-Fix: relax the ENTRY legality check in target/xtensa/translate.c
-(translate_entry) to match silicon. Incremental rebuild ~2-5 min, then rerun
-/tmp/run_xtqtest.sh (expects: 4 passed + 2 ignored).
-
-Fallback: patch embedded-test's xtensa success path to do a real reset
-(watchdog/RTC_CNTL or jump to ROM reset vector 0x40000400) - upstream PR
-territory.
+With these fixes applied (available via `docs/patches/0001-xtensa-openocd-semihosting.patch` or
+the pre-patched fork at https://github.com/kokroo/qemu branch `esp-develop-semihosting`),
+all tests pass cleanly:
+- `xtensa-esp32-demo`: 4 passed, 0 failed, 2 ignored.
 
 ## Reproducing the full loop from scratch
 

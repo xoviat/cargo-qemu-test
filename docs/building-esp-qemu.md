@@ -30,6 +30,11 @@ produces a working `qemu-system-xtensa` with esp32/esp32s3 machines.
 ## Step 1: sources
 
 ```console
+# Option A: clone the pre-patched fork (no patching needed)
+$ git clone --depth 1 -b esp-develop-semihosting --recursive https://github.com/kokroo/qemu esp-qemu
+$ cd esp-qemu
+
+# Option B: clone upstream and apply the patch
 $ git clone --depth 1 -b esp-develop --recursive https://github.com/espressif/qemu esp-qemu
 $ cd esp-qemu
 $ patch -p1 --dry-run < /path/to/cargo-qemu-test/docs/patches/0001-xtensa-openocd-semihosting.patch

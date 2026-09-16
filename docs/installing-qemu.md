@@ -82,15 +82,22 @@ package above or pass `--qemu /path/to/qemu-system-arm`.
 ## Xtensa (ESP32/S2/S3): the Espressif QEMU fork + semihosting patch
 
 Upstream QEMU has no ESP32 machines; use https://github.com/espressif/qemu
-(branch `esp-develop`). Stock embedded-test firmware additionally needs the
+(branch `esp-develop`) or the pre-patched fork at https://github.com/kokroo/qemu
+(branch `esp-develop-semihosting`). Stock embedded-test firmware additionally needs the
 patch in `docs/patches/0001-xtensa-openocd-semihosting.patch`, which teaches
 QEMU's Xtensa core the OpenOCD-style ARM-compatible semihosting trap
 (`break 1, 14`) that the Rust `semihosting` crate emits — QEMU otherwise only
 listens to SIMCALL, which no Rust crate speaks.
 
 ```console
+# Option A: clone the pre-patched fork directly
+$ git clone --depth 1 -b esp-develop-semihosting https://github.com/kokroo/qemu
+$ cd qemu
+
+# Option B: clone upstream espressif/qemu and apply the patch
 $ git clone --depth 1 -b esp-develop https://github.com/espressif/qemu
 $ cd qemu && patch -p1 < /path/to/cargo-qemu-test/docs/patches/0001-xtensa-openocd-semihosting.patch
+
 $ ./configure --target-list=xtensa-softmmu --disable-werror --disable-docs \
       --disable-sdl --disable-gtk --disable-vnc --disable-guest-agent --disable-user
 $ make -j$(nproc)
