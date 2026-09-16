@@ -16,7 +16,10 @@ qemu-test-macros = { version = "=0.1.0", path = "../qemu-test-macros" }
 # (not a proc-macro crate), these cfgs resolve against the *final* build target:
 # `embedded-test` is only compiled for bare-metal targets, `libtest-mimic` only
 # for std hosts. Users never write these target gates themselves.
-[target.'cfg(target_os = "none")'.dependencies]
+[target.'cfg(all(target_os = "none", not(target_arch = "xtensa")))'.dependencies]
+embedded-test = "0.7"
+
+[target.'cfg(all(target_os = "none", target_arch = "xtensa"))'.dependencies]
 embedded-test = { version = "0.7", features = ["xtensa-semihosting"] }
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
