@@ -4,5 +4,6 @@
 pub mod cli;
 pub mod compiler;
 pub mod defmt;
+pub mod download;
 pub mod elf;
 pub mod qemu;

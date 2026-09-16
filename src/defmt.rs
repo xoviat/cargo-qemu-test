@@ -126,15 +126,15 @@ pub fn resolve(args: &Cli, elf_path: &Path) -> Result<Option<DefmtInfo>> {
 }
 
 fn flush_garbage(lines: &mut Vec<String>, bytes: &[u8], start: Option<usize>, end: usize) {
-    if let Some(start) = start {
-        if end > start {
-            let text = String::from_utf8_lossy(&bytes[start..end]);
-            lines.extend(
-                text.lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .map(str::to_owned),
-            );
-        }
+    if let Some(start) = start
+        && end > start
+    {
+        let text = String::from_utf8_lossy(&bytes[start..end]);
+        lines.extend(
+            text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned),
+        );
     }
 }
 

@@ -13,19 +13,26 @@ env:
 
 jobs:
   host-tests:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
       - name: Run host tests (incl. defmt encode/decode roundtrip)
         run: cargo test --verbose
 
   dual-demo-host:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -53,8 +60,7 @@ jobs:
           grep -q "result: ok" "$RUNNER_TEMP/qtest-dual.log"
 
   # Xtensa end-to-end: espressif QEMU (fork, patched) + Espressif Rust toolchain.
-  # Mirrors examples/xtensa-esp32-demo's expected flow; skipped if the runner
-  # image lacks either piece.
+  # Uses transparent auto-download to fetch and cache prebuilt qemu-system-xtensa.
   xtensa-qemu:
     runs-on: ubuntu-latest
     strategy:
@@ -78,34 +84,34 @@ jobs:
         id: cache-qemu
         uses: actions/cache@v4
         with:
-          path: /opt/qemu-xtensa
-          key: qemu-system-xtensa-v0.1.0-noble
-      - name: Download prebuilt QEMU Xtensa
-        if: steps.cache-qemu.outputs.cache-hit != 'true'
-        run: |
-          sudo mkdir -p /opt/qemu-xtensa
-          curl -sL https://github.com/kokroo/qemu/releases/download/v0.1.0-semihosting/qemu-system-xtensa-esp32.tar.gz | sudo tar -xz -C /opt/qemu-xtensa
-          sudo chmod +x /opt/qemu-xtensa/qemu-system-xtensa
-      - name: Add QEMU to PATH
-        run: echo "/opt/qemu-xtensa" >> "$GITHUB_PATH"
+          path: ~/.cache/cargo-qtest
+          key: cargo-qtest-xtensa-v0.2.0-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-qtest
         run: cargo install --path .
-      - name: Run xtensa-esp32-demo under QEMU
+      - name: Run xtensa-esp32-demo under QEMU (transparent auto-download)
         working-directory: examples/xtensa-esp32-demo
         env:
           CARGO_UNSTABLE_BUILD_STD: core
           CARGO_UNSTABLE_BUILD_STD_FEATURES: compiler-builtins-mem
         run: |
           cargo qtest --target ${{ matrix.target }} --verbose
+
   riscv-qemu:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: riscv32imac-unknown-none-elf
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-riscv32
+      - name: Install QEMU (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-misc
+      - name: Install QEMU (macOS)
+        if: runner.os == 'macOS'
+        run: brew install qemu
       - name: Install cargo-qtest
         run: cargo install --path .
       - name: Run riscv32imac-demo under QEMU
@@ -137,6 +143,31 @@ jobs:
             exit 1
           fi
           grep -q "FAILED" "$RUNNER_TEMP/qtest-demo.log"
+
+  thumbv8m-qemu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabihf
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: Install cargo-qtest
+        run: cargo install --path .
+      - name: Run thumbv8m-demo (fails_on_bug intentionally fails)
+        working-directory: examples/thumbv8m-demo
+        run: |
+          set +e
+          cargo qtest --target thumbv8m.main-none-eabihf > "$RUNNER_TEMP/qtest-v8m.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/qtest-v8m.log"
+          if [ "$status" -eq 0 ]; then
+            echo "expected thumbv8m-demo to fail overall (fails_on_bug is intentional)"
+            exit 1
+          fi
+          grep -q "FAILED" "$RUNNER_TEMP/qtest-v8m.log"
 
 #      - name: Run defmt-demo (failing tests log via defmt; output must be decoded)
 #        working-directory: examples/defmt-demo

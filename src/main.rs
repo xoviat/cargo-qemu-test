@@ -38,6 +38,13 @@ fn main() -> Result<()> {
         .clone()
         .or_else(|| defaults.and_then(|d| d.cpu.map(String::from)));
 
+    let binary = cargo_qemu_test::download::ensure_qemu_binary(
+        &binary,
+        &machine,
+        &args.target,
+        args.verbose,
+    )?;
+
     let qemu_opts = qemu::QemuOptions {
         binary,
         machine,

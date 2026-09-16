@@ -405,7 +405,7 @@ mod tests {
             let t = qemu_for_target(triple).unwrap();
             assert_eq!(t.system, "qemu-system-arm");
             assert_eq!(t.machine, "mps2-an505");
-            assert_eq!(t.cpu.as_deref(), Some("cortex-m33"));
+            assert_eq!(t.cpu, Some("cortex-m33"));
         }
     }
 

@@ -79,7 +79,25 @@ $ qemu-system-arm -M mps2-an386 -cpu cortex-m4 -nographic     -semihosting-confi
 If `cargo qtest` reports `failed to spawn qemu-system-arm`, either install the
 package above or pass `--qemu /path/to/qemu-system-arm`.
 
-## Xtensa (ESP32/S2/S3): the Espressif QEMU fork + semihosting patch
+## Xtensa (ESP32 / ESP32-S2 / ESP32-S3): Espressif QEMU with semihosting
+
+### Option A: Automatic Prebuilt Download (Recommended)
+
+`cargo qtest` transparently downloads and caches a prebuilt, patched `qemu-system-xtensa` binary on demand when running tests for Xtensa targets (`xtensa-esp32-none-elf`, `xtensa-esp32s2-none-elf`, `xtensa-esp32s3-none-elf`).
+
+Supported host platforms:
+- Linux x86_64 (`x86_64-linux-gnu`)
+- Linux ARM64 (`aarch64-linux-gnu`)
+- macOS Apple Silicon (`aarch64-apple-darwin`)
+- Windows x86_64 & Windows ARM64 (`x86_64-w64-mingw32`)
+
+The binary is cached in `~/.cache/cargo-qtest` (or `%LOCALAPPDATA%\cargo-qtest` on Windows). You don't need to manually install or compile QEMU! Just run:
+
+```console
+$ cargo qtest --target xtensa-esp32-none-elf
+```
+
+### Option B: Build from Source or Clone
 
 Upstream QEMU has no ESP32 machines; use https://github.com/espressif/qemu
 (branch `esp-develop`) or the pre-patched fork at https://github.com/kokroo/qemu
@@ -90,7 +108,7 @@ QEMU's Xtensa core the OpenOCD-style ARM-compatible semihosting trap
 listens to SIMCALL, which no Rust crate speaks.
 
 ```console
-# Option A: clone the pre-patched fork directly
+# Clone the pre-patched fork directly
 $ git clone --depth 1 -b esp-develop-semihosting https://github.com/kokroo/qemu
 $ cd qemu
 

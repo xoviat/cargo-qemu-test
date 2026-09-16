@@ -66,10 +66,10 @@ pub fn read_embedded_tests(path: &Path) -> Result<Option<Vec<EmbeddedTest>>> {
             continue;
         }
         if raw_name.starts_with('{') {
-            if symbol.section_index() == Some(section_idx) {
-                if let Ok(meta) = serde_json::from_str::<TestMetadata>(raw_name) {
-                    metadata.push(meta);
-                }
+            if symbol.section_index() == Some(section_idx)
+                && let Ok(meta) = serde_json::from_str::<TestMetadata>(raw_name)
+            {
+                metadata.push(meta);
             }
             continue;
         }
