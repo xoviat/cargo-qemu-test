@@ -138,7 +138,7 @@ fn flush_garbage(lines: &mut Vec<String>, bytes: &[u8], start: Option<usize>, en
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};

@@ -79,7 +79,7 @@ jobs:
       - name: Install QEMU runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libslirp0
+          sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libslirp0 libsdl2-2.0-0
       - name: Cache QEMU Xtensa binary
         id: cache-qemu
         uses: actions/cache@v4

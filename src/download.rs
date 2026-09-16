@@ -63,10 +63,21 @@ pub fn host_platform_triplet() -> Result<&'static str> {
 
 /// Checks if a QEMU binary is runnable and supports a specific machine model.
 pub fn qemu_supports_machine(binary: &Path, machine: &str) -> bool {
-    let Ok(output) = Command::new(binary).arg("-M").arg("help").output() else {
-        return false;
+    let output = match Command::new(binary).arg("-M").arg("help").output() {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("qtest: failed to execute `{}`: {e}", binary.display());
+            return false;
+        }
     };
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        eprintln!(
+            "qtest: `{}` -M help failed with exit code {:?}\nstderr: {stderr}\nstdout: {stdout}",
+            binary.display(),
+            output.status.code()
+        );
         return false;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
