@@ -216,7 +216,7 @@ fn linker_fixup_config(cli: &Cli) -> Result<Option<String>> {
     }
     if !want_embedded_test {
         bail!(
-            "`embedded-test` found in the dependency graph of `{}`.\n             cargo-qtest only knows how to run embedded-test test suites.",
+            "`embedded-test` not found in the dependency graph of `{}`.\n             cargo-qtest only knows how to run embedded-test test suites.",
             root.name
         );
     }
