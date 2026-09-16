@@ -271,6 +271,170 @@ pub fn download_and_extract_qemu(binary_name: &str, verbose: bool) -> Result<Pat
     download_and_extract_qemu_to(binary_name, &cache_dir(), verbose)
 }
 
+/// Attempts to install missing system runtime dependencies for QEMU on the host platform.
+pub fn install_system_dependencies(verbose: bool) -> Result<()> {
+    match std::env::consts::OS {
+        "macos" => {
+            let brew_exists = Command::new("brew")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if brew_exists {
+                eprintln!(
+                    "qtest: installing QEMU runtime dependencies via Homebrew (glib, libgcrypt, libslirp, pixman, sdl2)..."
+                );
+                let mut cmd = Command::new("brew");
+                cmd.args(["install", "glib", "libgcrypt", "libslirp", "pixman", "sdl2"]);
+                if !verbose {
+                    cmd.stdout(std::process::Stdio::null());
+                }
+                let status = cmd.status().context("failed to execute `brew install`")?;
+                if status.success() {
+                    return Ok(());
+                }
+                bail!("`brew install` failed with status {:?}", status.code());
+            } else {
+                bail!(
+                    "Homebrew (`brew`) is not available. Please install dependencies manually: brew install glib libgcrypt libslirp pixman sdl2"
+                );
+            }
+        }
+        "linux" => {
+            // Check for Debian/Ubuntu (apt-get)
+            let apt_exists = Command::new("apt-get")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if apt_exists {
+                eprintln!("qtest: installing QEMU runtime dependencies via apt-get...");
+                let _ = Command::new("sudo").args(["apt-get", "update"]).status();
+                let status = Command::new("sudo")
+                    .args([
+                        "apt-get",
+                        "install",
+                        "-y",
+                        "libgcrypt20",
+                        "libglib2.0-0",
+                        "libpixman-1-0",
+                        "libslirp0",
+                        "libsdl2-2.0-0",
+                    ])
+                    .status()
+                    .context("failed to execute `sudo apt-get install`")?;
+                if status.success() {
+                    return Ok(());
+                }
+                bail!(
+                    "failed to install dependencies with apt-get. Run manually: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libslirp0 libsdl2-2.0-0"
+                );
+            }
+
+            // Check for Fedora/RHEL/CentOS (dnf)
+            let dnf_exists = Command::new("dnf")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if dnf_exists {
+                eprintln!("qtest: installing QEMU runtime dependencies via dnf...");
+                let status = Command::new("sudo")
+                    .args([
+                        "dnf",
+                        "install",
+                        "-y",
+                        "libgcrypt",
+                        "glib2",
+                        "pixman",
+                        "libslirp",
+                        "SDL2",
+                    ])
+                    .status()
+                    .context("failed to execute `sudo dnf install`")?;
+                if status.success() {
+                    return Ok(());
+                }
+                bail!(
+                    "failed to install dependencies with dnf. Run manually: sudo dnf install -y libgcrypt glib2 pixman libslirp SDL2"
+                );
+            }
+
+            // Check for Arch Linux (pacman)
+            let pacman_exists = Command::new("pacman")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if pacman_exists {
+                eprintln!("qtest: installing QEMU runtime dependencies via pacman...");
+                let status = Command::new("sudo")
+                    .args([
+                        "pacman",
+                        "-S",
+                        "--noconfirm",
+                        "libgcrypt",
+                        "glib2",
+                        "pixman",
+                        "libslirp",
+                        "sdl2",
+                    ])
+                    .status()
+                    .context("failed to execute `sudo pacman`")?;
+                if status.success() {
+                    return Ok(());
+                }
+                bail!(
+                    "failed to install dependencies with pacman. Run manually: sudo pacman -S libgcrypt glib2 pixman libslirp sdl2"
+                );
+            }
+
+            // Check for openSUSE (zypper)
+            let zypper_exists = Command::new("zypper")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if zypper_exists {
+                eprintln!("qtest: installing QEMU runtime dependencies via zypper...");
+                let status = Command::new("sudo")
+                    .args([
+                        "zypper",
+                        "install",
+                        "-y",
+                        "libgcrypt20",
+                        "libglib-2_0-0",
+                        "libpixman-1-0",
+                        "libslirp0",
+                        "libSDL2-2_0-0",
+                    ])
+                    .status()
+                    .context("failed to execute `sudo zypper`")?;
+                if status.success() {
+                    return Ok(());
+                }
+                bail!(
+                    "failed to install dependencies with zypper. Run manually: sudo zypper install -y libgcrypt20 libglib-2_0-0 libpixman-1-0 libslirp0 libSDL2-2_0-0"
+                );
+            }
+
+            bail!(
+                "could not detect a supported Linux package manager (apt-get, dnf, pacman, zypper). Please install QEMU runtime dependencies manually."
+            );
+        }
+        "windows" => {
+            // Windows archive already bundles all DLLs
+            Ok(())
+        }
+        _ => bail!("automatic dependency installation is not supported on this OS"),
+    }
+}
+
 /// Resolves and ensures a working QEMU binary for the given target and machine.
 ///
 /// If the binary exists on PATH and supports the target machine, it is returned as-is.
@@ -308,8 +472,20 @@ pub fn ensure_qemu_binary(
     // 3. If target is Xtensa (or machine is esp32*), check cache or auto-download:
     let is_espressif = target.starts_with("xtensa") || machine.starts_with("esp32");
     if is_espressif && binary_name.contains("xtensa") {
-        if let Some(cached) =
-            find_cached_qemu(&binary_name).filter(|c| qemu_supports_machine(c, machine))
+        let try_install_deps = |candidate: &Path| -> bool {
+            if std::env::var("CARGO_QTEST_NO_AUTO_DEPS").is_ok() {
+                return false;
+            }
+            eprintln!("qtest: attempting to install missing system runtime dependencies...");
+            if let Err(e) = install_system_dependencies(verbose) {
+                eprintln!("qtest: automatic dependency installation failed: {e}");
+                return false;
+            }
+            qemu_supports_machine(candidate, machine)
+        };
+
+        if let Some(cached) = find_cached_qemu(&binary_name)
+            && (qemu_supports_machine(&cached, machine) || try_install_deps(&cached))
         {
             if verbose {
                 eprintln!("qtest: using cached QEMU binary at {}", cached.display());
@@ -319,7 +495,7 @@ pub fn ensure_qemu_binary(
 
         // Not in cache or cached version doesn't support machine -> auto-download
         let downloaded = download_and_extract_qemu(&binary_name, verbose)?;
-        if !qemu_supports_machine(&downloaded, machine) {
+        if !qemu_supports_machine(&downloaded, machine) && !try_install_deps(&downloaded) {
             bail!(
                 "downloaded QEMU binary at {} does not support machine `{machine}`",
                 downloaded.display()
