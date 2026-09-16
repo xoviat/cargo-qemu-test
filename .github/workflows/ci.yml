@@ -111,7 +111,7 @@ jobs:
       - name: Run riscv32imac-demo under QEMU
         working-directory: examples/riscv32imac-demo
         run: |
-          cargo qtest --verbose
+          cargo qtest --target riscv32imac-unknown-none-elf --verbose
 
   qemu-e2e:
     runs-on: ubuntu-latest
