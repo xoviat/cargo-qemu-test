@@ -148,7 +148,7 @@ fn default_memory_x(target: &str) -> &'static str {
         return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40080000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40080400, LENGTH = 0x3F800\n  RWTEXT (rwx) : ORIGIN = 0x400BC000, LENGTH = 0x4000\n  RODATA (r)   : ORIGIN = 0x3FFAE000, LENGTH = 0x29000\n  RWDATA (rw)  : ORIGIN = 0x3FFD7000, LENGTH = 0x29000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
     }
     if target.starts_with("xtensa-esp32s3-none") {
-        return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40370000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40370400, LENGTH = 0x2FC00\n  RWTEXT (rwx) : ORIGIN = 0x403A0000, LENGTH = 0x40000\n  RODATA (r)   : ORIGIN = 0x3FC80000, LENGTH = 0x40000\n  RWDATA (rw)  : ORIGIN = 0x3FCC0000, LENGTH = 0x40000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
+        return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40370000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40370400, LENGTH = 0x6FC00\n  RWTEXT (rwx) : ORIGIN = 0x403E0000, LENGTH = 0x10000\n  RODATA (r)   : ORIGIN = 0x3FC80000, LENGTH = 0xC0000\n  RWDATA (rw)  : ORIGIN = 0x3FD40000, LENGTH = 0x90000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";
     }
     if target.starts_with("xtensa-esp32s2-none") {
         return "MEMORY\n{\n  vectors_seg : ORIGIN = 0x40020000, LENGTH = 0x400\n  ROTEXT (rx)  : ORIGIN = 0x40020400, LENGTH = 0x37C00\n  RWTEXT (rwx) : ORIGIN = 0x40057C00, LENGTH = 0x4000\n  RODATA (r)   : ORIGIN = 0x3FFB0000, LENGTH = 0x28000\n  RWDATA (rw)  : ORIGIN = 0x3FFD8000, LENGTH = 0x28000\n}\nPROVIDE(_stack_start_cpu0 = ORIGIN(RWDATA) + LENGTH(RWDATA));\n";

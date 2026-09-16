@@ -97,6 +97,21 @@ jobs:
           CARGO_UNSTABLE_BUILD_STD_FEATURES: compiler-builtins-mem
         run: |
           cargo qtest --target ${{ matrix.target }} --verbose
+  riscv-qemu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imac-unknown-none-elf
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-riscv32
+      - name: Install cargo-qtest
+        run: cargo install --path .
+      - name: Run riscv32imac-demo under QEMU
+        working-directory: examples/riscv32imac-demo
+        run: |
+          cargo qtest --verbose
 
   qemu-e2e:
     runs-on: ubuntu-latest
