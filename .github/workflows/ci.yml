@@ -74,7 +74,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust for Xtensa (Windows ARM64 via emulation)
+        if: matrix.os == 'windows-11-arm'
+        run: |
+          curl -sLO https://github.com/esp-rs/espup/releases/latest/download/espup-x86_64-pc-windows-msvc.zip
+          Expand-Archive -Force espup-x86_64-pc-windows-msvc.zip "$HOME\.cargo\bin"
+          & "$HOME\.cargo\bin\espup.exe" install --targets esp32,esp32s3
       - name: Install Rust for Xtensa
+        if: matrix.os != 'windows-11-arm'
         uses: esp-rs/xtensa-toolchain@v1.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
