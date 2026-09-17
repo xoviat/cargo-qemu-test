@@ -74,30 +74,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust for Xtensa (Windows ARM64 via emulation)
-        if: matrix.os == 'windows-11-arm'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -sLO https://github.com/esp-rs/espup/releases/latest/download/espup-x86_64-pc-windows-msvc.zip
-          Expand-Archive -Force espup-x86_64-pc-windows-msvc.zip "$HOME\.cargo\bin"
-          & "$HOME\.cargo\bin\espup.exe" install --targets esp32,esp32s3
-          rustup default esp
       - name: Install Rust for Xtensa
-        if: matrix.os != 'windows-11-arm'
-        uses: esp-rs/xtensa-toolchain@v1.5
+        uses: xoviat/xtensa-toolchain@windows-11-arm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           default: true
           buildtargets: esp32,esp32s3
           ldproxy: false
-      - name: Configure Xtensa Environment (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Get-ChildItem -Path "$HOME\.rustup\toolchains\esp" -Recurse -Filter "xtensa-esp32-elf-gcc.exe" | ForEach-Object {
-            echo $_.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
       - name: Install QEMU runtime dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
