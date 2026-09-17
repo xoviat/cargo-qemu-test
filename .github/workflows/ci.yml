@@ -134,7 +134,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -147,6 +147,21 @@ jobs:
       - name: Install QEMU (macOS)
         if: runner.os == 'macOS'
         run: brew install qemu
+      - name: Install QEMU (Windows x64)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install -y qemu
+          echo "C:\Program Files\qemu" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install QEMU (Windows ARM64 native via MSYS2)
+        if: matrix.os == 'windows-11-arm'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          install: mingw-w64-clang-aarch64-qemu
+      - name: Add MSYS2 QEMU to PATH (Windows ARM64)
+        if: matrix.os == 'windows-11-arm'
+        run: |
+          echo "C:\msys64\clangarm64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install cargo-qtest
         run: cargo install --path .
       - name: Run riscv32imac-demo under QEMU
