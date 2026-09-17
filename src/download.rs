@@ -80,7 +80,12 @@ pub fn host_arch() -> &'static str {
         let mut process_machine = 0u16;
         let mut native_machine = 0u16;
         unsafe {
-            if IsWow64Process2(GetCurrentProcess(), &mut process_machine, &mut native_machine) != 0 {
+            if IsWow64Process2(
+                GetCurrentProcess(),
+                &mut process_machine,
+                &mut native_machine,
+            ) != 0
+            {
                 // IMAGE_FILE_MACHINE_ARM64 = 0xAA64
                 if native_machine == 0xAA64 {
                     return "aarch64";
