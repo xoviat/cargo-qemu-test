@@ -263,7 +263,26 @@ pub fn download_and_extract_qemu_to(
     }
 
     eprintln!("qtest: ready: {}", cached.display());
+    configure_qemu_host_compatibility(&cached);
     Ok(cached)
+}
+
+/// Configures host OS environment or emulation settings for the QEMU binary if needed.
+pub fn configure_qemu_host_compatibility(_binary: &Path) {
+    #[cfg(windows)]
+    if std::env::consts::ARCH == "aarch64" {
+        // Under Windows 11 on ARM64, x86_64 QEMU runs via Prism emulation.
+        // Enabling strict execution mode prevents crashes in TCG JIT stack unwinding (STATUS_BAD_FUNCTION_TABLE).
+        let _ = Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers",
+                "/v",
+            ])
+            .arg(_binary)
+            .args(["/d", "~ ARM64VERYSTRICTEXECUTION", "/f"])
+            .status();
+    }
 }
 
 /// Downloads and extracts the prebuilt QEMU Xtensa archive for the current host platform to the default cache directory.
@@ -490,6 +509,7 @@ pub fn ensure_qemu_binary(
             if verbose {
                 eprintln!("qtest: using cached QEMU binary at {}", cached.display());
             }
+            configure_qemu_host_compatibility(&cached);
             return Ok(cached);
         }
 

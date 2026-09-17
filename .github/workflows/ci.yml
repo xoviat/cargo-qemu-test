@@ -120,7 +120,12 @@ jobs:
           CARGO_UNSTABLE_BUILD_STD_FEATURES: compiler-builtins-mem
           CARGO_QTEST_CACHE_DIR: ${{ runner.temp }}/cargo-qtest
         run: |
-          cargo qtest --target ${{ matrix.target }} --verbose
+          cargo qtest --target ${{ matrix.target }} --verbose -- --test-threads=1
+      - name: Diagnostics on failure (Windows)
+        if: failure() && runner.os == 'Windows'
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'} -MaxEvents 20 -ErrorAction SilentlyContinue | Where-Object { $_.LevelDisplayName -in 'Error', 'Critical', 'Warning' } | Format-List TimeCreated, ProviderName, Id, Message
+
 
   riscv-qemu:
     strategy:
