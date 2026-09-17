@@ -51,6 +51,11 @@ pub fn host_arch() -> &'static str {
     {
         // If compiled as x86_64 but running on Windows 11 ARM64 under Prism/WOW64 emulation,
         // detect the native host architecture so we download the native ARM64 QEMU binary.
+        if let Ok(arch) = std::env::var("RUNNER_ARCH") {
+            if arch.eq_ignore_ascii_case("ARM64") {
+                return "aarch64";
+            }
+        }
         if let Ok(arch) = std::env::var("PROCESSOR_ARCHITEW6432") {
             if arch.eq_ignore_ascii_case("ARM64") {
                 return "aarch64";
@@ -61,36 +66,29 @@ pub fn host_arch() -> &'static str {
                 return "aarch64";
             }
         }
-        #[repr(C)]
-        #[allow(non_snake_case)]
-        struct SYSTEM_INFO {
-            wProcessorArchitecture: u16,
-            wReserved: u16,
-            dwPageSize: u32,
-            lpMinimumApplicationAddress: *mut std::ffi::c_void,
-            lpMaximumApplicationAddress: *mut std::ffi::c_void,
-            dwActiveProcessorMask: usize,
-            dwNumberOfProcessors: u32,
-            dwProcessorType: u32,
-            dwAllocationGranularity: u32,
-            wProcessorLevel: u16,
-            wProcessorRevision: u16,
-        }
+
+        // Query Win32 IsWow64Process2 API (the definitive Windows API for host machine architecture under WOW64/Prism)
         #[link(name = "kernel32")]
         unsafe extern "system" {
-            fn GetNativeSystemInfo(lpSystemInfo: *mut SYSTEM_INFO);
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn IsWow64Process2(
+                hProcess: *mut std::ffi::c_void,
+                pProcessMachine: *mut u16,
+                pNativeMachine: *mut u16,
+            ) -> i32;
         }
-        let mut info = std::mem::MaybeUninit::<SYSTEM_INFO>::uninit();
+        let mut process_machine = 0u16;
+        let mut native_machine = 0u16;
         unsafe {
-            GetNativeSystemInfo(info.as_mut_ptr());
-            let info = info.assume_init();
-            // PROCESSOR_ARCHITECTURE_ARM64 = 12
-            if info.wProcessorArchitecture == 12 {
-                return "aarch64";
-            }
-            // PROCESSOR_ARCHITECTURE_AMD64 = 9
-            if info.wProcessorArchitecture == 9 {
-                return "x86_64";
+            if IsWow64Process2(GetCurrentProcess(), &mut process_machine, &mut native_machine) != 0 {
+                // IMAGE_FILE_MACHINE_ARM64 = 0xAA64
+                if native_machine == 0xAA64 {
+                    return "aarch64";
+                }
+                // IMAGE_FILE_MACHINE_AMD64 = 0x8664
+                if native_machine == 0x8664 {
+                    return "x86_64";
+                }
             }
         }
     }
