@@ -44,10 +44,57 @@ pub fn cache_dir() -> PathBuf {
     std::env::temp_dir().join("cargo-qtest")
 }
 
+/// Returns the native host architecture, correctly detecting ARM64 on Windows
+/// even if running under Prism / WOW64 emulation.
+pub fn host_arch() -> &'static str {
+    #[cfg(windows)]
+    {
+        // If compiled as x86_64 but running on Windows 11 ARM64 under Prism/WOW64 emulation,
+        // detect the native host architecture so we download the native ARM64 QEMU binary.
+        if let Ok(arch) = std::env::var("PROCESSOR_ARCHITEW6432") {
+            if arch.eq_ignore_ascii_case("ARM64") {
+                return "aarch64";
+            }
+        }
+        #[repr(C)]
+        struct SYSTEM_INFO {
+            wProcessorArchitecture: u16,
+            wReserved: u16,
+            dwPageSize: u32,
+            lpMinimumApplicationAddress: *mut std::ffi::c_void,
+            lpMaximumApplicationAddress: *mut std::ffi::c_void,
+            dwActiveProcessorMask: usize,
+            dwNumberOfProcessors: u32,
+            dwProcessorType: u32,
+            dwAllocationGranularity: u32,
+            wProcessorLevel: u16,
+            wProcessorRevision: u16,
+        }
+        extern "system" {
+            fn GetNativeSystemInfo(lpSystemInfo: *mut SYSTEM_INFO);
+        }
+        let mut info = std::mem::MaybeUninit::<SYSTEM_INFO>::uninit();
+        unsafe {
+            GetNativeSystemInfo(info.as_mut_ptr());
+            let info = info.assume_init();
+            // PROCESSOR_ARCHITECTURE_ARM64 = 12
+            if info.wProcessorArchitecture == 12 {
+                return "aarch64";
+            }
+            // PROCESSOR_ARCHITECTURE_AMD64 = 9
+            if info.wProcessorArchitecture == 9 {
+                return "x86_64";
+            }
+        }
+    }
+
+    std::env::consts::ARCH
+}
+
 /// Detects the current host platform triplet for prebuilt QEMU releases.
 pub fn host_platform_triplet() -> Result<&'static str> {
     let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
+    let arch = host_arch();
     match (os, arch) {
         ("linux", "x86_64") => Ok("x86_64-linux-gnu"),
         ("linux", "aarch64") => Ok("aarch64-linux-gnu"),

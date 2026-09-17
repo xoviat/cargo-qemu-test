@@ -114,7 +114,7 @@ jobs:
           path: ${{ runner.temp }}/cargo-qtest
           key: cargo-qtest-xtensa-v0.2.0-native-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-qtest
-        run: cargo install --path .
+        run: cargo +stable install --path . || cargo install --path .
       - name: Run xtensa-esp32-demo under QEMU (transparent auto-download)
         working-directory: examples/xtensa-esp32-demo
         env:
