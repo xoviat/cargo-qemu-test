@@ -53,8 +53,8 @@ pub fn host_platform_triplet() -> Result<&'static str> {
         ("linux", "aarch64") => Ok("aarch64-linux-gnu"),
         ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
-        // Windows x86_64 and Windows aarch64 (runs x86_64 binaries via Prism/WOW64 emulation)
-        ("windows", "x86_64") | ("windows", "aarch64") => Ok("x86_64-w64-mingw32"),
+        ("windows", "x86_64") => Ok("x86_64-w64-mingw32"),
+        ("windows", "aarch64") => Ok("aarch64-w64-mingw32"),
         _ => bail!(
             "unsupported host platform ({os}-{arch}) for automatic QEMU download. Please provide a custom QEMU binary via --qemu."
         ),
@@ -269,20 +269,7 @@ pub fn download_and_extract_qemu_to(
 
 /// Configures host OS environment or emulation settings for the QEMU binary if needed.
 pub fn configure_qemu_host_compatibility(_binary: &Path) {
-    #[cfg(windows)]
-    if std::env::consts::ARCH == "aarch64" {
-        // Under Windows 11 on ARM64, x86_64 QEMU runs via Prism emulation.
-        // Enabling strict execution mode prevents crashes in TCG JIT stack unwinding (STATUS_BAD_FUNCTION_TABLE).
-        let _ = Command::new("reg")
-            .args([
-                "add",
-                r"HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers",
-                "/v",
-            ])
-            .arg(_binary)
-            .args(["/d", "~ ARM64VERYSTRICTEXECUTION", "/f"])
-            .status();
-    }
+    // Native builds are used across supported platforms; no emulation workarounds needed.
 }
 
 /// Downloads and extracts the prebuilt QEMU Xtensa archive for the current host platform to the default cache directory.

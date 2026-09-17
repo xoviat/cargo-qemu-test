@@ -89,7 +89,8 @@ Supported host platforms:
 - Linux x86_64 (`x86_64-linux-gnu`)
 - Linux ARM64 (`aarch64-linux-gnu`)
 - macOS Apple Silicon (`aarch64-apple-darwin`)
-- Windows x86_64 & Windows ARM64 (`x86_64-w64-mingw32`)
+- Windows x86_64 (`x86_64-w64-mingw32`)
+- Windows ARM64 (`aarch64-w64-mingw32`)
 
 The binary is cached in `~/.cache/cargo-qtest` (or `%LOCALAPPDATA%\cargo-qtest` on Windows). You don't need to manually install or compile QEMU! Just run:
 
