@@ -80,6 +80,7 @@ jobs:
           curl -sLO https://github.com/esp-rs/espup/releases/latest/download/espup-x86_64-pc-windows-msvc.zip
           Expand-Archive -Force espup-x86_64-pc-windows-msvc.zip "$HOME\.cargo\bin"
           & "$HOME\.cargo\bin\espup.exe" install --targets esp32,esp32s3
+          rustup default esp
       - name: Install Rust for Xtensa
         if: matrix.os != 'windows-11-arm'
         uses: esp-rs/xtensa-toolchain@v1.5
