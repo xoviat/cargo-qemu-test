@@ -161,7 +161,9 @@ jobs:
       - name: Add MSYS2 QEMU to PATH (Windows ARM64)
         if: matrix.os == 'windows-11-arm'
         run: |
-          echo "C:\msys64\clangarm64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Get-ChildItem -Path "$env:RUNNER_TEMP" -Recurse -Filter "qemu-system-riscv32.exe" | ForEach-Object {
+            echo $_.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
       - name: Install cargo-qtest
         run: cargo install --path .
       - name: Run riscv32imac-demo under QEMU
