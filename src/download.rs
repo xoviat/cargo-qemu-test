@@ -56,7 +56,13 @@ pub fn host_arch() -> &'static str {
                 return "aarch64";
             }
         }
+        if let Ok(arch) = std::env::var("PROCESSOR_ARCHITECTURE") {
+            if arch.eq_ignore_ascii_case("ARM64") {
+                return "aarch64";
+            }
+        }
         #[repr(C)]
+        #[allow(non_snake_case)]
         struct SYSTEM_INFO {
             wProcessorArchitecture: u16,
             wReserved: u16,
@@ -70,7 +76,8 @@ pub fn host_arch() -> &'static str {
             wProcessorLevel: u16,
             wProcessorRevision: u16,
         }
-        extern "system" {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
             fn GetNativeSystemInfo(lpSystemInfo: *mut SYSTEM_INFO);
         }
         let mut info = std::mem::MaybeUninit::<SYSTEM_INFO>::uninit();
