@@ -83,6 +83,17 @@ jobs:
           Expand-Archive -Force espup-x86_64-pc-windows-msvc.zip "$HOME\.cargo\bin"
           & "$HOME\.cargo\bin\espup.exe" install --targets esp32,esp32s3
           rustup default esp
+      # Newer macOS runner images provide rustup outside ~/.cargo, but the
+      # esp-rs/xtensa-toolchain action hardcodes $HOME/.cargo/bin (espup unzip)
+      # and $HOME/.cargo/env (source) — install rustup into ~/.cargo when that
+      # directory is missing so the action's assumptions hold.
+      - name: Ensure rustup in ~/.cargo (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          if [ ! -f "$HOME/.cargo/env" ]; then
+            curl https://sh.rustup.rs -sSf | sh -s -- --profile minimal -y
+          fi
+          echo "$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
       - name: Install Rust for Xtensa
         if: matrix.os != 'windows-11-arm'
         uses: esp-rs/xtensa-toolchain@v1.5
