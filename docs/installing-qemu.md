@@ -81,9 +81,9 @@ package above or pass `--qemu /path/to/qemu-system-arm`.
 
 ## Xtensa (ESP32 / ESP32-S2 / ESP32-S3): Espressif QEMU with semihosting
 
-### Option A: Automatic Prebuilt Download (Recommended)
+### Option A: Prebuilt Download Script (Recommended)
 
-`cargo qtest` transparently downloads and caches a prebuilt, patched `qemu-system-xtensa` binary on demand when running tests for Xtensa targets (`xtensa-esp32-none-elf`, `xtensa-esp32s2-none-elf`, `xtensa-esp32s3-none-elf`).
+`cargo qtest --download` runs the download script that ships with the crate (`scripts/download-qemu.sh` on Unix, `scripts/download-qemu.ps1` on Windows) to fetch and cache a prebuilt, patched `qemu-system-xtensa` binary for Xtensa targets (`xtensa-esp32-none-elf`, `xtensa-esp32s2-none-elf`, `xtensa-esp32s3-none-elf`). No download ever happens unless you pass `--download`; without it, `cargo qtest` only uses a binary found on PATH or already in the cache.
 
 Supported host platforms:
 - Linux x86_64 (`x86_64-linux-gnu`)
@@ -95,8 +95,16 @@ Supported host platforms:
 The binary is cached in `~/.cache/cargo-qtest` (or `%LOCALAPPDATA%\cargo-qtest` on Windows). You don't need to manually install or compile QEMU! Just run:
 
 ```console
-$ cargo qtest --target xtensa-esp32-none-elf
+$ cargo qtest --target xtensa-esp32-none-elf --download
 ```
+
+The scripts are also usable standalone, e.g.:
+
+```console
+$ scripts/download-qemu.sh --verbose
+```
+
+A cached copy is reused on later runs (add `--download` again to force a re-download).
 
 ### Option B: Build from Source or Clone
 
