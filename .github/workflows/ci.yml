@@ -93,7 +93,7 @@ jobs:
           if [ ! -f "$HOME/.cargo/env" ]; then
             curl https://sh.rustup.rs -sSf | sh -s -- --profile minimal -y
           fi
-          echo "$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
       - name: Install Rust for Xtensa
         if: matrix.os != 'windows-11-arm'
         uses: esp-rs/xtensa-toolchain@v1.5
