@@ -1,8 +1,8 @@
 [package]
 name = "qemu-test"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.80"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.85"
 description = "Write embedded Rust tests once and run them both on a std host (cargo test, via libtest-mimic) and under QEMU on a no_std target (cargo qtest, via embedded-test)"
 license = "MIT OR Apache-2.0"
 keywords = ["embedded", "testing", "qemu", "no_std", "harness"]

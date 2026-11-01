@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-qemu-test"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "qemu-test"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "embedded-test",
  "libtest-mimic",
