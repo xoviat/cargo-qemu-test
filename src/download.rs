@@ -134,11 +134,13 @@ pub fn find_cached_qemu(binary_name: &str) -> Option<PathBuf> {
 /// it, returning the path of the extracted QEMU binary.
 ///
 /// The scripts handle platform-triplet detection, download (curl/wget or
-/// PowerShell), extraction and cache lookup. They print progress on stderr and
-/// the resulting binary path on stdout (last line); stderr is inherited so the
-/// user sees download progress live.
+/// PowerShell), extraction, cache lookup, machine verification via
+/// `qemu -M help`, and (on Unix) installation of missing system runtime
+/// dependencies. They print progress on stderr and the resulting binary path
+/// on stdout (last line); stderr is inherited so the user sees progress live.
 pub fn run_download_script(
     binary_name: &str,
+    machine: &str,
     cdir: &Path,
     force: bool,
     verbose: bool,
@@ -155,6 +157,7 @@ pub fn run_download_script(
         cmd.arg(&script);
         cmd.args(["-Binary", binary_name]);
         cmd.args(["-CacheDir", &cdir.to_string_lossy()]);
+        cmd.args(["-Machine", machine]);
         if force {
             cmd.arg("-Force");
         }
@@ -179,6 +182,7 @@ pub fn run_download_script(
         cmd.arg(&script);
         cmd.args(["--binary", binary_name]);
         cmd.args(["--cache-dir", &cdir.to_string_lossy()]);
+        cmd.args(["--machine", machine]);
         if force {
             cmd.arg("--force");
         }
@@ -222,170 +226,6 @@ pub fn run_download_script(
     Ok(reported)
 }
 
-/// Attempts to install missing system runtime dependencies for QEMU on the host platform.
-pub fn install_system_dependencies(verbose: bool) -> Result<()> {
-    match std::env::consts::OS {
-        "macos" => {
-            let brew_exists = Command::new("brew")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-
-            if brew_exists {
-                eprintln!(
-                    "qtest: installing QEMU runtime dependencies via Homebrew (glib, libgcrypt, libslirp, pixman, sdl2)..."
-                );
-                let mut cmd = Command::new("brew");
-                cmd.args(["install", "glib", "libgcrypt", "libslirp", "pixman", "sdl2"]);
-                if !verbose {
-                    cmd.stdout(std::process::Stdio::null());
-                }
-                let status = cmd.status().context("failed to execute `brew install`")?;
-                if status.success() {
-                    return Ok(());
-                }
-                bail!("`brew install` failed with status {:?}", status.code());
-            } else {
-                bail!(
-                    "Homebrew (`brew`) is not available. Please install dependencies manually: brew install glib libgcrypt libslirp pixman sdl2"
-                );
-            }
-        }
-        "linux" => {
-            // Check for Debian/Ubuntu (apt-get)
-            let apt_exists = Command::new("apt-get")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-
-            if apt_exists {
-                eprintln!("qtest: installing QEMU runtime dependencies via apt-get...");
-                let _ = Command::new("sudo").args(["apt-get", "update"]).status();
-                let status = Command::new("sudo")
-                    .args([
-                        "apt-get",
-                        "install",
-                        "-y",
-                        "libgcrypt20",
-                        "libglib2.0-0",
-                        "libpixman-1-0",
-                        "libslirp0",
-                        "libsdl2-2.0-0",
-                    ])
-                    .status()
-                    .context("failed to execute `sudo apt-get install`")?;
-                if status.success() {
-                    return Ok(());
-                }
-                bail!(
-                    "failed to install dependencies with apt-get. Run manually: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libslirp0 libsdl2-2.0-0"
-                );
-            }
-
-            // Check for Fedora/RHEL/CentOS (dnf)
-            let dnf_exists = Command::new("dnf")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-
-            if dnf_exists {
-                eprintln!("qtest: installing QEMU runtime dependencies via dnf...");
-                let status = Command::new("sudo")
-                    .args([
-                        "dnf",
-                        "install",
-                        "-y",
-                        "libgcrypt",
-                        "glib2",
-                        "pixman",
-                        "libslirp",
-                        "SDL2",
-                    ])
-                    .status()
-                    .context("failed to execute `sudo dnf install`")?;
-                if status.success() {
-                    return Ok(());
-                }
-                bail!(
-                    "failed to install dependencies with dnf. Run manually: sudo dnf install -y libgcrypt glib2 pixman libslirp SDL2"
-                );
-            }
-
-            // Check for Arch Linux (pacman)
-            let pacman_exists = Command::new("pacman")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-
-            if pacman_exists {
-                eprintln!("qtest: installing QEMU runtime dependencies via pacman...");
-                let status = Command::new("sudo")
-                    .args([
-                        "pacman",
-                        "-S",
-                        "--noconfirm",
-                        "libgcrypt",
-                        "glib2",
-                        "pixman",
-                        "libslirp",
-                        "sdl2",
-                    ])
-                    .status()
-                    .context("failed to execute `sudo pacman`")?;
-                if status.success() {
-                    return Ok(());
-                }
-                bail!(
-                    "failed to install dependencies with pacman. Run manually: sudo pacman -S libgcrypt glib2 pixman libslirp sdl2"
-                );
-            }
-
-            // Check for openSUSE (zypper)
-            let zypper_exists = Command::new("zypper")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-
-            if zypper_exists {
-                eprintln!("qtest: installing QEMU runtime dependencies via zypper...");
-                let status = Command::new("sudo")
-                    .args([
-                        "zypper",
-                        "install",
-                        "-y",
-                        "libgcrypt20",
-                        "libglib-2_0-0",
-                        "libpixman-1-0",
-                        "libslirp0",
-                        "libSDL2-2_0-0",
-                    ])
-                    .status()
-                    .context("failed to execute `sudo zypper`")?;
-                if status.success() {
-                    return Ok(());
-                }
-                bail!(
-                    "failed to install dependencies with zypper. Run manually: sudo zypper install -y libgcrypt20 libglib-2_0-0 libpixman-1-0 libslirp0 libSDL2-2_0-0"
-                );
-            }
-
-            bail!(
-                "could not detect a supported Linux package manager (apt-get, dnf, pacman, zypper). Please install QEMU runtime dependencies manually."
-            );
-        }
-        "windows" => {
-            // Windows archive already bundles all DLLs
-            Ok(())
-        }
-        _ => bail!("automatic dependency installation is not supported on this OS"),
-    }
-}
-
 /// Resolves and ensures a working QEMU binary for the given target and machine.
 ///
 /// If the binary exists on PATH and supports the target machine, it is returned as-is.
@@ -393,6 +233,8 @@ pub fn install_system_dependencies(verbose: bool) -> Result<()> {
 /// prebuilt binary is downloaded (by running the bundled script) only when the
 /// user explicitly requested a download via `download = true`
 /// (`cargo qtest --download`); otherwise a helpful error explains the options.
+/// Machine verification and system dependency installation happen inside the
+/// script, not in Rust.
 pub fn ensure_qemu_binary(
     binary: &Path,
     machine: &str,
@@ -427,24 +269,10 @@ pub fn ensure_qemu_binary(
     //    via the bundled script only when the user requested it:
     let is_espressif = target.starts_with("xtensa") || machine.starts_with("esp32");
     if is_espressif && binary_name.contains("xtensa") {
-        let try_install_deps = |candidate: &Path| -> bool {
-            if std::env::var("CARGO_QTEST_NO_AUTO_DEPS").is_ok() {
-                return false;
-            }
-            eprintln!("qtest: attempting to install missing system runtime dependencies...");
-            if let Err(e) = install_system_dependencies(verbose) {
-                eprintln!("qtest: automatic dependency installation failed: {e}");
-                return false;
-            }
-            qemu_supports_machine(candidate, machine)
-        };
-
         let cached = find_cached_qemu(&binary_name);
-        let cached_is_usable = match &cached {
-            Some(path) => qemu_supports_machine(path, machine) || try_install_deps(path),
-            None => false,
-        };
-        if let (Some(path), true) = (&cached, cached_is_usable) {
+        if let Some(path) = &cached
+            && qemu_supports_machine(path, machine)
+        {
             if verbose {
                 eprintln!("qtest: using cached QEMU binary at {}", path.display());
             }
@@ -455,14 +283,14 @@ pub fn ensure_qemu_binary(
             return Err(match &cached {
                 Some(path) => anyhow::anyhow!(
                     "the cached QEMU binary at {} does not support machine `{machine}`.\n\
-                     Pass --download to re-download a prebuilt binary (runs the bundled download script), \
+                     Pass --download to re-check it and re-download if needed (runs the bundled download script, which also installs missing system runtime dependencies), \
                      run scripts/download-qemu.sh (or scripts/download-qemu.ps1) yourself, \
                      or pass an existing binary via --qemu.",
                     path.display()
                 ),
                 None => anyhow::anyhow!(
                     "`{binary_name}` was not found on PATH or in the cache directory {}.\n\
-                     Pass --download to fetch a prebuilt binary (runs the bundled download script), \
+                     Pass --download to fetch a prebuilt binary (runs the bundled download script, which also installs missing system runtime dependencies), \
                      run scripts/download-qemu.sh (or scripts/download-qemu.ps1) yourself, \
                      or pass an existing binary via --qemu.",
                     cache_dir().display()
@@ -470,11 +298,11 @@ pub fn ensure_qemu_binary(
             });
         }
 
-        // The user requested a download: run the bundled script. Force a fresh
-        // download when a stale cached copy exists but does not work.
-        let force = cached.is_some();
-        let downloaded = run_download_script(&binary_name, &cache_dir(), force, verbose)?;
-        if !qemu_supports_machine(&downloaded, machine) && !try_install_deps(&downloaded) {
+        // The user requested a download: run the bundled script, which repairs
+        // the cache (machine check + system dependencies) and only downloads a
+        // fresh copy when the cached one is still unusable.
+        let downloaded = run_download_script(&binary_name, machine, &cache_dir(), false, verbose)?;
+        if !qemu_supports_machine(&downloaded, machine) {
             bail!(
                 "downloaded QEMU binary at {} does not support machine `{machine}`",
                 downloaded.display()
@@ -568,7 +396,7 @@ mod tests {
     fn test_run_download_script() {
         let temp_cache = std::env::temp_dir().join("cargo-qtest-test-download");
         let _ = std::fs::remove_dir_all(&temp_cache);
-        let res = run_download_script("qemu-system-xtensa", &temp_cache, false, true);
+        let res = run_download_script("qemu-system-xtensa", "esp32", &temp_cache, false, true);
         assert!(res.is_ok(), "download should succeed: {:?}", res.err());
         let bin = res.unwrap();
         assert!(bin.exists(), "extracted binary should exist");
@@ -595,5 +423,11 @@ mod tests {
             "powershell script content missing"
         );
         assert!(DOWNLOAD_SH.starts_with("#!/usr/bin/env bash"));
+        // System dependency installation lives in the scripts, not in Rust.
+        assert!(
+            DOWNLOAD_SH.contains("apt-get"),
+            "bash script must install system deps"
+        );
+        assert!(DOWNLOAD_SH.contains("CARGO_QTEST_NO_AUTO_DEPS"));
     }
 }

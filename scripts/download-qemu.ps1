@@ -7,7 +7,13 @@ and runs it only when a download is explicitly requested (`cargo qtest
 --download`). It can also be run standalone:
 
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\download-qemu.ps1 `
-        [-Binary NAME] [-CacheDir DIR] [-Tag TAG] [-Url URL] [-Force] [-VerboseOutput]
+        [-Binary NAME] [-CacheDir DIR] [-Tag TAG] [-Url URL] [-Machine MACHINE]
+        [-Force] [-VerboseOutput]
+
+With -Machine, the resulting binary is verified against `qemu -M help`
+before it is accepted. The Windows archive bundles all required DLLs, so no
+system dependency installation happens here (the bash script handles that on
+Unix); a binary failing the check triggers a fresh download instead.
 
 On success the absolute path of the ready-to-run binary is printed on stdout
 and the process exits 0. Progress and diagnostics go to stderr.
@@ -18,6 +24,7 @@ param(
     [string]$CacheDir = $env:CARGO_QTEST_CACHE_DIR,
     [string]$Tag = $(if ($env:CARGO_QTEST_QEMU_TAG) { $env:CARGO_QTEST_QEMU_TAG } else { "v0.2.0-semihosting" }),
     [string]$Url = $env:CARGO_QTEST_QEMU_URL,
+    [string]$Machine,
     [switch]$Force,
     [switch]$VerboseOutput
 )
@@ -84,6 +91,27 @@ $triplet = switch ($arch) {
     }
 }
 
+# --- machine verification ----------------------------------------------------
+# Probes `<binary> -M help` for $Machine. Empty $Machine always passes.
+function Test-Machine([string]$Path) {
+    if (-not $Machine) { return $true }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & $Path -M help 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    foreach ($line in $out) {
+        $first = ("$line" -split '\s+', 2)[0]
+        if ($first -eq $Machine) { return $true }
+    }
+    return $false
+}
+
 # --- locate an already-cached binary ----------------------------------------
 $exe = "$Binary.exe"
 function Find-Cached {
@@ -102,9 +130,12 @@ function Find-Cached {
 if (-not $Force) {
     $existing = Find-Cached
     if ($existing) {
-        Write-Log "using cached QEMU binary at $existing"
-        Write-Output $existing
-        exit 0
+        if (Test-Machine $existing) {
+            Write-Log "using cached QEMU binary at $existing"
+            Write-Output $existing
+            exit 0
+        }
+        Write-Log "cached binary at $existing failed the machine check; downloading a fresh copy..."
     }
 }
 
@@ -180,5 +211,11 @@ if (-not $binaryPath) {
     exit 1
 }
 
-Write-Log "ready: $binaryPath"
-Write-Output $binaryPath
+if (Test-Machine $binaryPath) {
+    Write-Log "ready: $binaryPath"
+    Write-Output $binaryPath
+    exit 0
+}
+Write-Log "the QEMU binary at $binaryPath does not support machine ``$Machine``."
+Write-Log "The Windows archive bundles all required DLLs, so a fresh download was already tried; pass an existing binary via --qemu."
+exit 1
