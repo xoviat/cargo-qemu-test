@@ -1,13 +1,24 @@
-//! Automatic download and caching of prebuilt QEMU binaries (specifically
-//! `qemu-system-xtensa` with semihosting and Espressif chip support).
+//! Resolution of the QEMU binary used to run tests, plus on-demand execution
+//! of the bundled download scripts (`scripts/download-qemu.sh` and
+//! `scripts/download-qemu.ps1`) that fetch and cache a prebuilt
+//! `qemu-system-xtensa` binary.
+//!
+//! All download, archive-extraction and host-platform detection logic lives in
+//! those scripts, which ship with this crate and are embedded at compile time.
+//! The Rust code only launches a script when the user explicitly requests a
+//! download (`cargo qtest --download`).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
-/// Default release tag on `kokroo/qemu` containing multi-platform prebuilt binaries.
-pub const DEFAULT_QEMU_TAG: &str = "v0.2.0-semihosting";
+/// Bash download script distributed with the crate (`scripts/download-qemu.sh`).
+const DOWNLOAD_SH: &str = include_str!("../scripts/download-qemu.sh");
+
+/// PowerShell download script distributed with the crate
+/// (`scripts/download-qemu.ps1`).
+const DOWNLOAD_PS1: &str = include_str!("../scripts/download-qemu.ps1");
 
 /// Returns the user cache directory for `cargo-qtest`.
 ///
@@ -17,6 +28,9 @@ pub const DEFAULT_QEMU_TAG: &str = "v0.2.0-semihosting";
 /// 3. macOS: `$HOME/Library/Caches/cargo-qtest`
 /// 4. Linux / other Unix: `$XDG_CACHE_HOME/cargo-qtest` or `$HOME/.cache/cargo-qtest`
 /// 5. System temporary directory: `std::env::temp_dir()/cargo-qtest`
+///
+/// The resolved directory is passed to the download scripts so that lookups
+/// and downloads always agree on one location.
 pub fn cache_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CARGO_QTEST_CACHE_DIR") {
         return PathBuf::from(dir);
@@ -42,80 +56,6 @@ pub fn cache_dir() -> PathBuf {
         }
     }
     std::env::temp_dir().join("cargo-qtest")
-}
-
-/// Returns the native host architecture, correctly detecting ARM64 on Windows
-/// even if running under Prism / WOW64 emulation.
-pub fn host_arch() -> &'static str {
-    #[cfg(windows)]
-    {
-        // If compiled as x86_64 but running on Windows 11 ARM64 under Prism/WOW64 emulation,
-        // detect the native host architecture so we download the native ARM64 QEMU binary.
-        if let Ok(arch) = std::env::var("RUNNER_ARCH") {
-            if arch.eq_ignore_ascii_case("ARM64") {
-                return "aarch64";
-            }
-        }
-        if let Ok(arch) = std::env::var("PROCESSOR_ARCHITEW6432") {
-            if arch.eq_ignore_ascii_case("ARM64") {
-                return "aarch64";
-            }
-        }
-        if let Ok(arch) = std::env::var("PROCESSOR_ARCHITECTURE") {
-            if arch.eq_ignore_ascii_case("ARM64") {
-                return "aarch64";
-            }
-        }
-
-        // Query Win32 IsWow64Process2 API (the definitive Windows API for host machine architecture under WOW64/Prism)
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn GetCurrentProcess() -> *mut std::ffi::c_void;
-            fn IsWow64Process2(
-                hProcess: *mut std::ffi::c_void,
-                pProcessMachine: *mut u16,
-                pNativeMachine: *mut u16,
-            ) -> i32;
-        }
-        let mut process_machine = 0u16;
-        let mut native_machine = 0u16;
-        unsafe {
-            if IsWow64Process2(
-                GetCurrentProcess(),
-                &mut process_machine,
-                &mut native_machine,
-            ) != 0
-            {
-                // IMAGE_FILE_MACHINE_ARM64 = 0xAA64
-                if native_machine == 0xAA64 {
-                    return "aarch64";
-                }
-                // IMAGE_FILE_MACHINE_AMD64 = 0x8664
-                if native_machine == 0x8664 {
-                    return "x86_64";
-                }
-            }
-        }
-    }
-
-    std::env::consts::ARCH
-}
-
-/// Detects the current host platform triplet for prebuilt QEMU releases.
-pub fn host_platform_triplet() -> Result<&'static str> {
-    let os = std::env::consts::OS;
-    let arch = host_arch();
-    match (os, arch) {
-        ("linux", "x86_64") => Ok("x86_64-linux-gnu"),
-        ("linux", "aarch64") => Ok("aarch64-linux-gnu"),
-        ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
-        ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
-        ("windows", "x86_64") => Ok("x86_64-w64-mingw32"),
-        ("windows", "aarch64") => Ok("aarch64-w64-mingw32"),
-        _ => bail!(
-            "unsupported host platform ({os}-{arch}) for automatic QEMU download. Please provide a custom QEMU binary via --qemu."
-        ),
-    }
 }
 
 /// Checks if a QEMU binary is runnable and supports a specific machine model.
@@ -190,148 +130,96 @@ pub fn find_cached_qemu(binary_name: &str) -> Option<PathBuf> {
     find_cached_qemu_in(binary_name, &cache_dir())
 }
 
-/// Downloads a file from `url` to `dest` using curl, wget, or powershell.
-fn download_file(url: &str, dest: &Path) -> Result<()> {
-    // 1. Try curl (available on Linux, macOS, and Windows 10/11)
-    let status = Command::new("curl")
-        .arg("-sSL")
-        .arg("-f")
-        .arg(url)
-        .arg("-o")
-        .arg(dest)
-        .status();
-
-    if matches!(status, Ok(s) if s.success()) {
-        return Ok(());
-    }
-
-    // 2. On Windows, try PowerShell WebClient
-    #[cfg(windows)]
-    {
-        let ps_cmd = format!(
-            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('{}', '{}')",
-            url,
-            dest.display()
-        );
-        let ps_status = Command::new("powershell")
-            .arg("-NoProfile")
-            .arg("-Command")
-            .arg(&ps_cmd)
-            .status();
-        if matches!(ps_status, Ok(s) if s.success()) {
-            return Ok(());
-        }
-    }
-
-    // 3. On Unix, try wget
-    #[cfg(unix)]
-    {
-        let wget_status = Command::new("wget")
-            .arg("-q")
-            .arg("-O")
-            .arg(dest)
-            .arg(url)
-            .status();
-        if matches!(wget_status, Ok(s) if s.success()) {
-            return Ok(());
-        }
-    }
-
-    bail!(
-        "failed to download {url}. Ensure an active internet connection and that `curl` or `wget` is installed."
-    );
-}
-
-/// Extracts a `.tar.xz` or `.tar.gz` archive to `dest_dir` using system `tar`.
-fn extract_tar_archive(archive: &Path, dest_dir: &Path) -> Result<()> {
-    let status = Command::new("tar")
-        .arg("-xf")
-        .arg(archive)
-        .arg("-C")
-        .arg(dest_dir)
-        .status();
-
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => bail!(
-            "tar failed to extract {} (exit code {:?})",
-            archive.display(),
-            s.code()
-        ),
-        Err(e) => bail!(
-            "failed to execute `tar` to extract {}: {e}",
-            archive.display()
-        ),
-    }
-}
-
-/// Downloads and extracts the prebuilt QEMU Xtensa archive for the current host platform to `cdir`.
-pub fn download_and_extract_qemu_to(
+/// Writes the embedded download script for this platform into `cdir` and runs
+/// it, returning the path of the extracted QEMU binary.
+///
+/// The scripts handle platform-triplet detection, download (curl/wget or
+/// PowerShell), extraction and cache lookup. They print progress on stderr and
+/// the resulting binary path on stdout (last line); stderr is inherited so the
+/// user sees download progress live.
+pub fn run_download_script(
     binary_name: &str,
     cdir: &Path,
+    force: bool,
     verbose: bool,
 ) -> Result<PathBuf> {
-    let triplet = host_platform_triplet()?;
-    let tag =
-        std::env::var("CARGO_QTEST_QEMU_TAG").unwrap_or_else(|_| DEFAULT_QEMU_TAG.to_string());
-    let archive_name = format!("qemu-xtensa-softmmu-{tag}-{triplet}.tar.xz");
-
-    let url = if let Ok(custom_url) = std::env::var("CARGO_QTEST_QEMU_URL") {
-        custom_url
-    } else {
-        format!("https://github.com/kokroo/qemu/releases/download/{tag}/{archive_name}")
-    };
-
     std::fs::create_dir_all(cdir)
         .with_context(|| format!("failed to create cache directory at {}", cdir.display()))?;
 
-    let archive_path = cdir.join(&archive_name);
-
-    eprintln!("qtest: downloading prebuilt `{binary_name}` for `{triplet}` from GitHub ({tag})...");
-    if verbose {
-        eprintln!("qtest: download URL: {url}");
-        eprintln!("qtest: destination: {}", archive_path.display());
-    }
-
-    download_file(&url, &archive_path)?;
-
-    eprintln!("qtest: extracting archive to {}...", cdir.display());
-    extract_tar_archive(&archive_path, cdir)?;
-
-    // Clean up archive to save disk space
-    let _ = std::fs::remove_file(&archive_path);
-
-    let cached = find_cached_qemu_in(binary_name, cdir).with_context(|| {
-        format!(
-            "archive was extracted to {}, but `{binary_name}` was not found in qemu/bin",
-            cdir.display()
-        )
-    })?;
-
-    // On Unix, ensure the binary is executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&cached) {
-            let mut perms = meta.permissions();
-            perms.set_mode(perms.mode() | 0o755);
-            let _ = std::fs::set_permissions(&cached, perms);
+    let mut cmd = if cfg!(windows) {
+        let script = cdir.join("download-qemu.ps1");
+        std::fs::write(&script, DOWNLOAD_PS1)
+            .with_context(|| format!("failed to write {}", script.display()))?;
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+        cmd.arg(&script);
+        cmd.args(["-Binary", binary_name]);
+        cmd.args(["-CacheDir", &cdir.to_string_lossy()]);
+        if force {
+            cmd.arg("-Force");
         }
+        if verbose {
+            cmd.arg("-VerboseOutput");
+        }
+        cmd
+    } else {
+        let script = cdir.join("download-qemu.sh");
+        std::fs::write(&script, DOWNLOAD_SH)
+            .with_context(|| format!("failed to write {}", script.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&script) {
+                let mut perms = meta.permissions();
+                perms.set_mode(perms.mode() | 0o755);
+                let _ = std::fs::set_permissions(&script, perms);
+            }
+        }
+        let mut cmd = Command::new("bash");
+        cmd.arg(&script);
+        cmd.args(["--binary", binary_name]);
+        cmd.args(["--cache-dir", &cdir.to_string_lossy()]);
+        if force {
+            cmd.arg("--force");
+        }
+        if verbose {
+            cmd.arg("--verbose");
+        }
+        cmd
+    };
+
+    let child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("failed to run the bundled QEMU download script with {cmd:?}"))?;
+    let output = child
+        .wait_with_output()
+        .context("failed while waiting for the QEMU download script")?;
+
+    if !output.status.success() {
+        bail!(
+            "the QEMU download script failed with exit code {:?}. \
+             You can also run it yourself (scripts/download-qemu.sh / scripts/download-qemu.ps1) \
+             or pass an existing binary via --qemu.",
+            output.status.code()
+        );
     }
 
-    eprintln!("qtest: ready: {}", cached.display());
-    configure_qemu_host_compatibility(&cached);
-    Ok(cached)
-}
-
-/// Configures host OS environment or emulation settings for the QEMU binary if needed.
-pub fn configure_qemu_host_compatibility(_binary: &Path) {
-    // Native builds are used across supported platforms; no emulation workarounds needed.
-}
-
-/// Downloads and extracts the prebuilt QEMU Xtensa archive for the current host platform to the default cache directory.
-pub fn download_and_extract_qemu(binary_name: &str, verbose: bool) -> Result<PathBuf> {
-    download_and_extract_qemu_to(binary_name, &cache_dir(), verbose)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let reported = stdout
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .with_context(|| {
+            format!(
+                "the QEMU download script did not report a valid binary path (stdout: {stdout:?})"
+            )
+        })?;
+    Ok(reported)
 }
 
 /// Attempts to install missing system runtime dependencies for QEMU on the host platform.
@@ -501,12 +389,15 @@ pub fn install_system_dependencies(verbose: bool) -> Result<()> {
 /// Resolves and ensures a working QEMU binary for the given target and machine.
 ///
 /// If the binary exists on PATH and supports the target machine, it is returned as-is.
-/// If not, and the target is an Xtensa/Espressif target, it checks the local cache or
-/// downloads a prebuilt binary transparently.
+/// For Xtensa/Espressif targets a cached copy is used when it works. A
+/// prebuilt binary is downloaded (by running the bundled script) only when the
+/// user explicitly requested a download via `download = true`
+/// (`cargo qtest --download`); otherwise a helpful error explains the options.
 pub fn ensure_qemu_binary(
     binary: &Path,
     machine: &str,
     target: &str,
+    download: bool,
     verbose: bool,
 ) -> Result<PathBuf> {
     // 1. If user passed an explicit file path (with directory components):
@@ -532,7 +423,8 @@ pub fn ensure_qemu_binary(
         }
     }
 
-    // 3. If target is Xtensa (or machine is esp32*), check cache or auto-download:
+    // 3. If target is Xtensa (or machine is esp32*), check the cache; download
+    //    via the bundled script only when the user requested it:
     let is_espressif = target.starts_with("xtensa") || machine.starts_with("esp32");
     if is_espressif && binary_name.contains("xtensa") {
         let try_install_deps = |candidate: &Path| -> bool {
@@ -547,18 +439,41 @@ pub fn ensure_qemu_binary(
             qemu_supports_machine(candidate, machine)
         };
 
-        if let Some(cached) = find_cached_qemu(&binary_name)
-            && (qemu_supports_machine(&cached, machine) || try_install_deps(&cached))
-        {
+        let cached = find_cached_qemu(&binary_name);
+        let cached_is_usable = match &cached {
+            Some(path) => qemu_supports_machine(path, machine) || try_install_deps(path),
+            None => false,
+        };
+        if let (Some(path), true) = (&cached, cached_is_usable) {
             if verbose {
-                eprintln!("qtest: using cached QEMU binary at {}", cached.display());
+                eprintln!("qtest: using cached QEMU binary at {}", path.display());
             }
-            configure_qemu_host_compatibility(&cached);
-            return Ok(cached);
+            return Ok(path.clone());
         }
 
-        // Not in cache or cached version doesn't support machine -> auto-download
-        let downloaded = download_and_extract_qemu(&binary_name, verbose)?;
+        if !download {
+            return Err(match &cached {
+                Some(path) => anyhow::anyhow!(
+                    "the cached QEMU binary at {} does not support machine `{machine}`.\n\
+                     Pass --download to re-download a prebuilt binary (runs the bundled download script), \
+                     run scripts/download-qemu.sh (or scripts/download-qemu.ps1) yourself, \
+                     or pass an existing binary via --qemu.",
+                    path.display()
+                ),
+                None => anyhow::anyhow!(
+                    "`{binary_name}` was not found on PATH or in the cache directory {}.\n\
+                     Pass --download to fetch a prebuilt binary (runs the bundled download script), \
+                     run scripts/download-qemu.sh (or scripts/download-qemu.ps1) yourself, \
+                     or pass an existing binary via --qemu.",
+                    cache_dir().display()
+                ),
+            });
+        }
+
+        // The user requested a download: run the bundled script. Force a fresh
+        // download when a stale cached copy exists but does not work.
+        let force = cached.is_some();
+        let downloaded = run_download_script(&binary_name, &cache_dir(), force, verbose)?;
         if !qemu_supports_machine(&downloaded, machine) && !try_install_deps(&downloaded) {
             bail!(
                 "downloaded QEMU binary at {} does not support machine `{machine}`",
@@ -592,12 +507,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_host_platform_triplet() {
-        let triplet = host_platform_triplet();
-        assert!(triplet.is_ok(), "host platform should be supported");
-    }
-
-    #[test]
     fn test_cache_dir() {
         let cdir = cache_dir();
         assert!(cdir.to_string_lossy().contains("cargo-qtest"));
@@ -612,7 +521,7 @@ mod tests {
     #[test]
     fn test_ensure_qemu_binary_missing_explicit_path() {
         let path = Path::new("/path/to/nonexistent/qemu-system-test");
-        let res = ensure_qemu_binary(path, "virt", "riscv32-unknown-none-elf", false);
+        let res = ensure_qemu_binary(path, "virt", "riscv32-unknown-none-elf", false, false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("does not exist"));
     }
@@ -620,10 +529,28 @@ mod tests {
     #[test]
     fn test_ensure_qemu_binary_missing_non_xtensa() {
         let binary = Path::new("qemu-system-nonexistent-12345");
-        let res = ensure_qemu_binary(binary, "virt", "thumbv7em-none-eabihf", false);
+        let res = ensure_qemu_binary(binary, "virt", "thumbv7em-none-eabihf", false, false);
         assert!(res.is_err());
         let err = res.unwrap_err().to_string();
         assert!(err.contains("was not found in PATH"));
+    }
+
+    #[test]
+    fn test_ensure_qemu_binary_xtensa_requires_download_request() {
+        // Without --download, a missing xtensa binary must never trigger the
+        // download script: it errors with instructions instead.
+        let binary = Path::new("qemu-system-xtensa-nonexistent-12345");
+        let res = ensure_qemu_binary(binary, "esp32", "xtensa-esp32-none-elf", false, false);
+        assert!(res.is_err());
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("--download"),
+            "error should mention --download: {err}"
+        );
+        assert!(
+            err.contains("was not found"),
+            "error should explain absence: {err}"
+        );
     }
 
     #[test]
@@ -638,10 +565,10 @@ mod tests {
 
     #[test]
     #[ignore = "requires network access to download prebuilt QEMU archive from GitHub"]
-    fn test_download_and_extract_qemu() {
+    fn test_run_download_script() {
         let temp_cache = std::env::temp_dir().join("cargo-qtest-test-download");
         let _ = std::fs::remove_dir_all(&temp_cache);
-        let res = download_and_extract_qemu_to("qemu-system-xtensa", &temp_cache, true);
+        let res = run_download_script("qemu-system-xtensa", &temp_cache, false, true);
         assert!(res.is_ok(), "download should succeed: {:?}", res.err());
         let bin = res.unwrap();
         assert!(bin.exists(), "extracted binary should exist");
@@ -654,5 +581,19 @@ mod tests {
             "binary must support esp32s3"
         );
         let _ = std::fs::remove_dir_all(&temp_cache);
+    }
+
+    #[test]
+    fn test_embedded_scripts_are_distributed() {
+        // The scripts ship with the crate and are embedded at compile time.
+        assert!(
+            DOWNLOAD_SH.contains("download"),
+            "bash script content missing"
+        );
+        assert!(
+            DOWNLOAD_PS1.contains("download"),
+            "powershell script content missing"
+        );
+        assert!(DOWNLOAD_SH.starts_with("#!/usr/bin/env bash"));
     }
 }

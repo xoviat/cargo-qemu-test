@@ -42,6 +42,7 @@ fn main() -> Result<()> {
         &binary,
         &machine,
         &args.target,
+        args.download,
         args.verbose,
     )?;
 
