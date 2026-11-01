@@ -21,11 +21,11 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
+    Attribute, Ident, Item, ItemFn, ItemMod, LitStr, Path, Result, ReturnType, Token, Type,
+    TypeTuple,
     parse::{Parse, ParseStream},
     parse_macro_input,
     spanned::Spanned,
-    Attribute, Ident, Item, ItemFn, ItemMod, LitStr, Path, Result, ReturnType, Token, Type,
-    TypeTuple,
 };
 
 /// Arguments of `#[test(init = some::path)]` (embedded-test 0.7 per-test init).
@@ -252,7 +252,7 @@ fn expand(input: ItemMod) -> Result<TokenStream2> {
             return Err(syn::Error::new(
                 ident_span,
                 "qemu-test: #[tests] must be applied to an inline module",
-            ))
+            ));
         }
     };
     let mod_attrs = &attrs; // e.g. #[cfg(test)] — copied to both twins
