@@ -138,83 +138,88 @@ fn flush_garbage(lines: &mut Vec<String>, bytes: &[u8], start: Option<usize>, en
     }
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use object::write::{Object as WriteObject, Symbol as WriteSymbol, SymbolSection};
+    use object::{
+        Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
+    };
 
-    static CAPTURED: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    /// Builds a firmware-style ELF image whose `.defmt` section carries the
+    /// format strings at small section-relative addresses, exactly like the
+    /// `INFO`-type `.defmt` section of a real defmt firmware ELF.
+    ///
+    /// A host binary's `.defmt` is an ordinary allocated section, so its
+    /// symbol addresses are full virtual addresses while defmt wire indices
+    /// are `u16` addresses -- the running test binary can therefore never
+    /// round-trip its own frames. The QEMU end-to-end jobs cover decoding
+    /// on real firmware ELFs; this exercises [`DefmtInfo::decode_output`]
+    /// against a table shaped like the real thing.
+    fn synthetic_elf() -> Vec<u8> {
+        let mut obj = WriteObject::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+        let section = obj.add_section(Vec::new(), b".defmt".to_vec(), SectionKind::Data);
+        // Only bitflags values are ever read back out of section contents;
+        // format strings come from the symbol names.
+        obj.append_section_data(section, &[0; 256], 1);
 
-    fn captured() -> &'static Mutex<Vec<u8>> {
-        CAPTURED.get_or_init(|| Mutex::new(Vec::new()))
+        let mut add = |name: &str, value: u64| {
+            obj.add_symbol(WriteSymbol {
+                name: name.as_bytes().to_vec(),
+                value,
+                kind: SymbolKind::Data,
+                scope: SymbolScope::Linkage,
+                weak: false,
+                section: SymbolSection::Section(section),
+                flags: SymbolFlags::None,
+                size: 16,
+            });
+        };
+
+        // Matched by name in the decoder's first pass (and skipped in the
+        // second): these select the wire format version and encoding.
+        add("_defmt_version_ = 4", 100);
+        add("_defmt_encoding_ = raw", 101);
+
+        let symbol = |tag: &str, data: &str| {
+            format!(
+                r#"{{"package":"cargo-qemu-test","disambiguator":"0","tag":"{tag}","data":{data:?}}}"#
+            )
+        };
+        // Symbol values are the wire indices; the timestamp entry is
+        // recognised by its tag and kept out of the index map.
+        add(&symbol("defmt_timestamp", "{=u64}"), 1);
+        add(&symbol("defmt_error", "qtest third {=bool}"), 0);
+        add(&symbol("defmt_info", "qtest canary {=u8}"), 2);
+        add(&symbol("defmt_warn", "qtest second {=u16}"), 3);
+
+        obj.write().expect("synthetic ELF should serialize")
     }
 
-    #[defmt::global_logger]
-    struct CaptureLogger;
-
-    static ENCODER: std::sync::Mutex<defmt::Encoder> = std::sync::Mutex::new(defmt::Encoder::new());
-
-    fn sink(bytes: &[u8]) {
-        captured().lock().unwrap().extend_from_slice(bytes);
+    /// One raw-encoded frame: `[index u16 LE][timestamp {=u64} raw][args]`.
+    fn frame(index: u16, args: &[u8]) -> Vec<u8> {
+        let mut out = index.to_le_bytes().to_vec();
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(args);
+        out
     }
 
-    defmt::timestamp!("{=u64}", 0);
-
-    // Safety: this is a host-side test double; frames are encoded with the
-    // real `defmt::Encoder` (raw encoding) and all sink writes go to a
-    // mutex-guarded buffer, so the acquire/write/release ordering the trait
-    // requires is upheld.
-    unsafe impl defmt::Logger for CaptureLogger {
-        fn acquire() {
-            ENCODER.lock().unwrap().start_frame(sink);
-        }
-
-        unsafe fn release() {
-            ENCODER.lock().unwrap().end_frame(sink);
-        }
-
-        unsafe fn write(bytes: &[u8]) {
-            ENCODER.lock().unwrap().write(bytes, sink);
-        }
-
-        unsafe fn flush() {}
-    }
-
-    /// Host-side roundtrip helper: parse the `.defmt` table of the running
-    /// test binary. Returns `None` (skipping the test) when the host linker
-    /// garbage-collected the `.defmt` section -- interned strings are
-    /// unreferenced on host targets unless `--no-gc-sections` is forced, which
-    /// breaks other link jobs. The QEMU end-to-end tests cover decoding on
-    /// real firmware ELFs either way.
-    fn own_table() -> Option<DefmtInfo> {
-        match DefmtInfo::from_elf(&std::env::current_exe().unwrap()) {
-            Ok(Some(info)) => Some(info),
-            Ok(None) => {
-                eprintln!("skipping: test binary has no .defmt section");
-                None
-            }
-            Err(e) => {
-                eprintln!("skipping: cannot parse own .defmt section: {e:#}");
-                None
-            }
-        }
+    fn synthetic_table() -> DefmtInfo {
+        DefmtInfo::from_elf_bytes(&synthetic_elf())
+            .expect("synthetic ELF should parse")
+            .expect("synthetic ELF carries a .defmt table")
     }
 
     #[test]
     fn decodes_frames_and_passes_text_through() {
-        let Some(info) = own_table() else {
-            return;
-        };
-        let buf = captured();
-        buf.lock().unwrap().clear();
+        let info = synthetic_table();
 
-        defmt::info!("qtest canary {=u8}", 7);
-        defmt::warn!("qtest second {=u16}", 300);
+        let mut bytes = frame(2, &[7]); // INFO  qtest canary 7
+        bytes.extend_from_slice(&frame(3, &300u16.to_le_bytes())); // WARN  qtest second 300
         // Plain semihosting text interleaved with the frames, then another frame.
-        buf.lock().unwrap().extend_from_slice(b"plain panic line\n");
-        defmt::error!("qtest third {=bool}", true);
+        bytes.extend_from_slice(b"plain panic line\n");
+        bytes.extend_from_slice(&frame(0, &[1])); // ERROR qtest third true
 
-        let bytes = buf.lock().unwrap().clone();
         let lines = info.decode_output(&bytes);
         let joined = lines.join("\n");
 
@@ -244,9 +249,7 @@ mod tests {
 
     #[test]
     fn undecodable_bytes_become_text() {
-        let Some(info) = own_table() else {
-            return;
-        };
+        let info = synthetic_table();
         let lines = info.decode_output(b"not defmt at all\n");
         assert_eq!(lines, vec!["not defmt at all".to_string()]);
     }
