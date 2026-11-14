@@ -1,24 +1,111 @@
-//! Resolution of the QEMU binary used to run tests, plus on-demand execution
-//! of the bundled download scripts (`scripts/download-qemu.sh` and
-//! `scripts/download-qemu.ps1`) that fetch and cache a prebuilt
+//! Resolution of the QEMU binary used to run tests, plus on-demand fetching
+//! and execution of the platform download script (`download-qemu.sh` on Unix,
+//! `download-qemu.ps1` on Windows) that fetches and caches a prebuilt
 //! `qemu-system-xtensa` binary.
 //!
-//! All download, archive-extraction and host-platform detection logic lives in
-//! those scripts, which ship with this crate and are embedded at compile time.
-//! The Rust code only launches a script when the user explicitly requests a
-//! download (`cargo qtest --download`).
+//! The scripts are not bundled with this crate: when the user explicitly
+//! requests a download (`cargo qtest --download`), the script for the current
+//! platform is fetched over HTTPS from the latest `kokroo/qemu` GitHub
+//! release (the patched QEMU fork the binary comes from) and written into the
+//! cache directory. All download, archive-extraction and host-platform
+//! detection logic lives in those scripts; the Rust code only fetches and
+//! launches one.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
-/// Bash download script distributed with the crate (`scripts/download-qemu.sh`).
-const DOWNLOAD_SH: &str = include_str!("../scripts/download-qemu.sh");
+/// Base URL of the download scripts published in the latest `kokroo/qemu`
+/// GitHub release (the patched QEMU fork the prebuilt binary comes from).
+const SCRIPT_BASE_URL: &str = "https://github.com/kokroo/qemu/releases/latest/download";
 
-/// PowerShell download script distributed with the crate
-/// (`scripts/download-qemu.ps1`).
-const DOWNLOAD_PS1: &str = include_str!("../scripts/download-qemu.ps1");
+/// Name of the download script for the current platform.
+fn script_file_name() -> &'static str {
+    if cfg!(windows) {
+        "download-qemu.ps1"
+    } else {
+        "download-qemu.sh"
+    }
+}
+
+/// URL the download script is fetched from: `CARGO_QTEST_SCRIPT_URL` when set
+/// (mirror or pinned release), otherwise the latest-release asset.
+fn script_url() -> String {
+    match std::env::var("CARGO_QTEST_SCRIPT_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => format!("{SCRIPT_BASE_URL}/{}", script_file_name()),
+    }
+}
+
+/// Minimal sanity check that a fetched body is actually one of our scripts
+/// rather than an HTML error page from a mirror or CDN.
+fn looks_like_script(body: &str) -> bool {
+    let head = body.trim_start();
+    (head.starts_with("#!") || head.starts_with("<#")) && body.contains("download")
+}
+
+/// Downloads the platform download script over HTTPS and writes it into
+/// `cdir`, returning the path of the written script.
+///
+/// If the fetch fails but a previously fetched copy exists in `cdir`, that
+/// copy is reused (with a warning) so a transient network problem does not
+/// break an otherwise usable cache.
+pub fn fetch_download_script(cdir: &Path) -> Result<PathBuf> {
+    let url = script_url();
+    let path = cdir.join(script_file_name());
+
+    let fetched = (|| -> Result<String> {
+        let mut response = ureq::get(&url)
+            .header(
+                "User-Agent",
+                "cargo-qtest (https://github.com/xoviat/cargo-qemu-test)",
+            )
+            .call()
+            .with_context(|| format!("failed to fetch the download script from {url}"))?;
+        response
+            .body_mut()
+            .read_to_string()
+            .with_context(|| format!("failed to read the download script returned by {url}"))
+    })();
+
+    let script = match fetched {
+        Ok(body) if looks_like_script(&body) => body,
+        Ok(body) => bail!(
+            "the response from {url} does not look like the QEMU download script \
+             ({} bytes); refusing to run it",
+            body.len()
+        ),
+        Err(err) => {
+            if path.is_file() {
+                eprintln!(
+                    "qtest: could not fetch the download script ({err:#}); \
+                     reusing the existing copy at {}",
+                    path.display()
+                );
+                return Ok(path);
+            }
+            bail!(
+                "could not download the QEMU download script from {url}: {err:#}. \
+                 Download `download-qemu.sh` (Unix) or `download-qemu.ps1` (Windows) \
+                 from that release and place it at {} manually.",
+                path.display()
+            );
+        }
+    };
+
+    std::fs::write(&path, script).with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o755);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+    }
+    Ok(path)
+}
 
 /// Returns the user cache directory for `cargo-qtest`.
 ///
@@ -130,8 +217,9 @@ pub fn find_cached_qemu(binary_name: &str) -> Option<PathBuf> {
     find_cached_qemu_in(binary_name, &cache_dir())
 }
 
-/// Writes the embedded download script for this platform into `cdir` and runs
-/// it, returning the path of the extracted QEMU binary.
+/// Fetches the download script for this platform from the latest
+/// `kokroo/qemu` GitHub release, writes it into `cdir` and runs it,
+/// returning the path of the extracted QEMU binary.
 ///
 /// The scripts handle platform-triplet detection, download (curl/wget or
 /// PowerShell), extraction, cache lookup, machine verification via
@@ -148,10 +236,11 @@ pub fn run_download_script(
     std::fs::create_dir_all(cdir)
         .with_context(|| format!("failed to create cache directory at {}", cdir.display()))?;
 
+    // The script is not bundled with the crate: fetch it from the latest
+    // kokroo/qemu release before running it.
+    let script = fetch_download_script(cdir)?;
+
     let mut cmd = if cfg!(windows) {
-        let script = cdir.join("download-qemu.ps1");
-        std::fs::write(&script, DOWNLOAD_PS1)
-            .with_context(|| format!("failed to write {}", script.display()))?;
         let mut cmd = Command::new("powershell");
         cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
         cmd.arg(&script);
@@ -166,18 +255,6 @@ pub fn run_download_script(
         }
         cmd
     } else {
-        let script = cdir.join("download-qemu.sh");
-        std::fs::write(&script, DOWNLOAD_SH)
-            .with_context(|| format!("failed to write {}", script.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&script) {
-                let mut perms = meta.permissions();
-                perms.set_mode(perms.mode() | 0o755);
-                let _ = std::fs::set_permissions(&script, perms);
-            }
-        }
         let mut cmd = Command::new("bash");
         cmd.arg(&script);
         cmd.args(["--binary", binary_name]);
@@ -197,7 +274,7 @@ pub fn run_download_script(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .with_context(|| format!("failed to run the bundled QEMU download script with {cmd:?}"))?;
+        .with_context(|| format!("failed to run the QEMU download script with {cmd:?}"))?;
     let output = child
         .wait_with_output()
         .context("failed while waiting for the QEMU download script")?;
@@ -205,9 +282,10 @@ pub fn run_download_script(
     if !output.status.success() {
         bail!(
             "the QEMU download script failed with exit code {:?}. \
-             You can also run it yourself (scripts/download-qemu.sh / scripts/download-qemu.ps1) \
+             You can also download and run it yourself ({}) \
              or pass an existing binary via --qemu.",
-            output.status.code()
+            output.status.code(),
+            script_url()
         );
     }
 
@@ -230,7 +308,8 @@ pub fn run_download_script(
 ///
 /// If the binary exists on PATH and supports the target machine, it is returned as-is.
 /// For Xtensa/Espressif targets a cached copy is used when it works. A
-/// prebuilt binary is downloaded (by running the bundled script) only when the
+/// prebuilt binary is downloaded (by fetching the script from the latest
+/// `kokroo/qemu` release and running it) only when the
 /// user explicitly requested a download via `download = true`
 /// (`cargo qtest --download`); otherwise a helpful error explains the options.
 /// Machine verification and system dependency installation happen inside the
@@ -266,7 +345,7 @@ pub fn ensure_qemu_binary(
     }
 
     // 3. If target is Xtensa (or machine is esp32*), check the cache; download
-    //    via the bundled script only when the user requested it:
+    //    via the release script only when the user requested it:
     let is_espressif = target.starts_with("xtensa") || machine.starts_with("esp32");
     if is_espressif && binary_name.contains("xtensa") {
         let cached = find_cached_qemu(&binary_name);
@@ -283,24 +362,27 @@ pub fn ensure_qemu_binary(
             return Err(match &cached {
                 Some(path) => anyhow::anyhow!(
                     "the cached QEMU binary at {} does not support machine `{machine}`.\n\
-                     Pass --download to re-check it and re-download if needed (runs the bundled download script, which also installs missing system runtime dependencies), \
-                     run scripts/download-qemu.sh (or scripts/download-qemu.ps1) yourself, \
+                     Pass --download to re-check it and re-download if needed (fetches the download script from the latest kokroo/qemu release, which also installs missing system runtime dependencies), \
+                     or download and run that script yourself ({}) \
                      or pass an existing binary via --qemu.",
-                    path.display()
+                    path.display(),
+                    script_url()
                 ),
                 None => anyhow::anyhow!(
                     "`{binary_name}` was not found on PATH or in the cache directory {}.\n\
-                     Pass --download to fetch a prebuilt binary (runs the bundled download script, which also installs missing system runtime dependencies), \
-                     run scripts/download-qemu.sh (or scripts/download-qemu.ps1) yourself, \
+                     Pass --download to fetch a prebuilt binary (fetches the download script from the latest kokroo/qemu release, which also installs missing system runtime dependencies), \
+                     or download and run that script yourself ({}) \
                      or pass an existing binary via --qemu.",
-                    cache_dir().display()
+                    cache_dir().display(),
+                    script_url()
                 ),
             });
         }
 
-        // The user requested a download: run the bundled script, which repairs
-        // the cache (machine check + system dependencies) and only downloads a
-        // fresh copy when the cached one is still unusable.
+        // The user requested a download: fetch the script from the latest
+        // kokroo/qemu release and run it, which repairs the cache (machine
+        // check + system dependencies) and only downloads a fresh copy when
+        // the cached one is still unusable.
         let downloaded = run_download_script(&binary_name, machine, &cache_dir(), false, verbose)?;
         if !qemu_supports_machine(&downloaded, machine) {
             bail!(
@@ -412,22 +494,43 @@ mod tests {
     }
 
     #[test]
-    fn test_embedded_scripts_are_distributed() {
-        // The scripts ship with the crate and are embedded at compile time.
-        assert!(
-            DOWNLOAD_SH.contains("download"),
-            "bash script content missing"
+    fn test_script_url_points_at_latest_release() {
+        assert_eq!(
+            script_file_name(),
+            if cfg!(windows) {
+                "download-qemu.ps1"
+            } else {
+                "download-qemu.sh"
+            }
         );
         assert!(
-            DOWNLOAD_PS1.contains("download"),
-            "powershell script content missing"
+            SCRIPT_BASE_URL.starts_with("https://github.com/kokroo/qemu/releases/latest/download"),
+            "scripts must be fetched from the latest kokroo/qemu release: {SCRIPT_BASE_URL}"
         );
-        assert!(DOWNLOAD_SH.starts_with("#!/usr/bin/env bash"));
-        // System dependency installation lives in the scripts, not in Rust.
-        assert!(
-            DOWNLOAD_SH.contains("apt-get"),
-            "bash script must install system deps"
-        );
-        assert!(DOWNLOAD_SH.contains("CARGO_QTEST_NO_AUTO_DEPS"));
+    }
+
+    #[test]
+    fn test_looks_like_script() {
+        assert!(looks_like_script(
+            "#!/usr/bin/env bash\n# download\necho hi\n"
+        ));
+        assert!(looks_like_script("<#\ndownload\n#>\n"));
+        assert!(!looks_like_script(
+            "<html><body>404 Not Found</body></html>"
+        ));
+        assert!(!looks_like_script(""));
+    }
+
+    #[test]
+    #[ignore = "requires network access to the latest kokroo/qemu GitHub release"]
+    fn test_fetch_download_script() {
+        let temp_cache = std::env::temp_dir().join("cargo-qtest-test-fetch-script");
+        let _ = std::fs::remove_dir_all(&temp_cache);
+        std::fs::create_dir_all(&temp_cache).unwrap();
+        let script =
+            fetch_download_script(&temp_cache).expect("download script fetch should succeed");
+        let body = std::fs::read_to_string(&script).expect("script should be readable");
+        assert!(looks_like_script(&body), "fetched script looks wrong");
+        let _ = std::fs::remove_dir_all(&temp_cache);
     }
 }

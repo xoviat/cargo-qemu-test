@@ -83,7 +83,7 @@ package above or pass `--qemu /path/to/qemu-system-arm`.
 
 ### Option A: Prebuilt Download Script (Recommended)
 
-`cargo qtest --download` runs the download script that ships with the crate (`scripts/download-qemu.sh` on Unix, `scripts/download-qemu.ps1` on Windows) to fetch and cache a prebuilt, patched `qemu-system-xtensa` binary for Xtensa targets (`xtensa-esp32-none-elf`, `xtensa-esp32s2-none-elf`, `xtensa-esp32s3-none-elf`). The script also verifies the binary against the requested machine (`qemu -M help`) and, on Unix, installs missing system runtime libraries (Homebrew/apt/dnf/pacman/zypper; set `CARGO_QTEST_NO_AUTO_DEPS=1` to disable that). No download ever happens unless you pass `--download`; without it, `cargo qtest` only uses a binary found on PATH or already in the cache.
+`cargo qtest --download` fetches the platform download script (`download-qemu.sh` on Unix, `download-qemu.ps1` on Windows) from the latest [kokroo/qemu](https://github.com/kokroo/qemu/releases/latest) GitHub release and runs it to fetch and cache a prebuilt, patched `qemu-system-xtensa` binary for Xtensa targets (`xtensa-esp32-none-elf`, `xtensa-esp32s2-none-elf`, `xtensa-esp32s3-none-elf`). The script also verifies the binary against the requested machine (`qemu -M help`) and, on Unix, installs missing system runtime libraries (Homebrew/apt/dnf/pacman/zypper; set `CARGO_QTEST_NO_AUTO_DEPS=1` to disable that). No download ever happens unless you pass `--download`; without it, `cargo qtest` only uses a binary found on PATH or already in the cache. Set `CARGO_QTEST_SCRIPT_URL` to fetch the script from somewhere else (a mirror or a pinned release).
 
 Supported host platforms:
 - Linux x86_64 (`x86_64-linux-gnu`)
@@ -101,7 +101,8 @@ $ cargo qtest --target xtensa-esp32-none-elf --download
 The scripts are also usable standalone, e.g.:
 
 ```console
-$ scripts/download-qemu.sh --verbose
+$ curl -fsSL -o download-qemu.sh https://github.com/kokroo/qemu/releases/latest/download/download-qemu.sh
+$ bash download-qemu.sh --verbose
 ```
 
 A cached copy is reused on later runs; it is only re-downloaded when it fails the machine check (add `--force` to the standalone script to always re-download).

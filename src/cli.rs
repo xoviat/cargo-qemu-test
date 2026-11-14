@@ -59,10 +59,10 @@ pub struct Cli {
     pub timeout: u64,
 
     /// Download (or re-download) a prebuilt QEMU binary for Xtensa/ESP32
-    /// targets by running the bundled download script (scripts/download-qemu.sh
-    /// on Unix, scripts/download-qemu.ps1 on Windows) when no working binary
-    /// is found on PATH or in the cache. Without this flag no download is ever
-    /// attempted.
+    /// targets by fetching the platform download script (download-qemu.sh on
+    /// Unix, download-qemu.ps1 on Windows) from the latest kokroo/qemu GitHub
+    /// release and running it, when no working binary is found on PATH or in
+    /// the cache. Without this flag no download is ever attempted.
     #[arg(long)]
     pub download: bool,
 

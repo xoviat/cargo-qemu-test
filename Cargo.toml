@@ -23,6 +23,9 @@ object = "0.40"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rustc-demangle = "0.1"
+# Fetches the QEMU download script from the latest kokroo/qemu release.
+# rustls only: no system TLS libraries, no async runtime.
+ureq = { version = "3.5", default-features = false, features = ["rustls", "rustls-webpki-roots"] }
 
 [target.'cfg(not(windows))'.dev-dependencies]
 defmt = { version = "1", features = ["encoding-raw"] }
