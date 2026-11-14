@@ -154,7 +154,13 @@ jobs:
           targets: riscv32imac-unknown-none-elf
       - name: Install QEMU (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-misc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc
+          # QEMU >= 9.1 (Ubuntu 26.04, the current ubuntu-latest) moved the
+          # RISC-V emulators into a separate qemu-system-riscv package;
+          # older images have no such package, so ignore failure there.
+          sudo apt-get install -y qemu-system-riscv || true
       - name: Install QEMU (macOS)
         if: runner.os == 'macOS'
         run: brew install qemu
