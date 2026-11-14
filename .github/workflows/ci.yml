@@ -62,7 +62,8 @@ jobs:
           grep -q "result: ok" "$RUNNER_TEMP/qtest-dual.log"
 
   # Xtensa end-to-end: espressif QEMU (fork, patched) + Espressif Rust toolchain.
-  # Uses the bundled download script (--download) to fetch and cache prebuilt qemu-system-xtensa.
+  # Uses the download script fetched from the latest kokroo/qemu release
+  # (--download) to fetch and cache prebuilt qemu-system-xtensa.
   xtensa-qemu:
     strategy:
       fail-fast: false
@@ -126,7 +127,7 @@ jobs:
           key: cargo-qtest-xtensa-v0.2.0-native-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-qtest
         run: cargo install --path .
-      - name: Run xtensa-esp32-demo under QEMU (download via bundled script)
+      - name: Run xtensa-esp32-demo under QEMU (download via release script)
         working-directory: examples/xtensa-esp32-demo
         env:
           CARGO_UNSTABLE_BUILD_STD: core
